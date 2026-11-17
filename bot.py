@@ -29,8 +29,8 @@ Your personality:
 - Intelligent, composed, respectful and precise.
 - Address the user as General when natural.
 - Explain technical matters clearly.
-- Be honest about what you can and cannot do.
-- Never claim to have executed an action you have not performed.
+- Be honest about your capabilities.
+- Never claim to have performed an action you have not performed.
 - Ask for confirmation before sensitive actions.
 - You are an assistant, not an autonomous authority.
 """
@@ -44,6 +44,7 @@ def home():
 def ask_openai(history):
     payload = {
         "model": MODEL,
+        "instructions": SYSTEM_PROMPT,
         "input": history,
         "max_output_tokens": 700
     }
@@ -58,24 +59,33 @@ def ask_openai(history):
         method="POST"
     )
 
-    with urllib.request.urlopen(request, timeout=60) as response:
-        result = json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            result = json.loads(response.read().decode("utf-8"))
+
+    except urllib.error.HTTPError as error:
+        details = error.read().decode("utf-8", errors="replace")
+        print("OPENAI HTTP ERROR:", error.code, details, flush=True)
+        raise
+
+    except urllib.error.URLError as error:
+        print("OPENAI CONNECTION ERROR:", str(error.reason), flush=True)
+        raise
 
     for item in result.get("output", []):
         for content in item.get("content", []):
             if content.get("type") == "output_text":
                 return content.get("text", "")
 
+    print("OPENAI RESPONSE:", json.dumps(result), flush=True)
     return "I couldn't generate a response. Please try again, General."
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["history"] = []
-
     await update.message.reply_text(
         "GENERAL JARVIS ONLINE.\n"
-        "AI intelligence module connected.\n"
-        "Systems initialized.\n"
+        "Telegram connection established.\n"
         "Awaiting instructions, General."
     )
 
@@ -83,10 +93,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "GENERAL JARVIS COMMANDS\n\n"
-        "/start - Initialize Jarvis and reset chat memory\n"
-        "/help - Show available commands\n"
-        "/reset - Clear conversation memory\n\n"
-        "AI intelligence is online."
+        "/start - Initialize Jarvis\n"
+        "/help - Show commands\n"
+        "/reset - Clear conversation memory"
     )
 
 
@@ -99,80 +108,50 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def respond(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message.text.strip()
-
     if not message:
         return
 
     await update.message.chat.send_action("typing")
-
     history = context.user_data.setdefault("history", [])
-
-    history.append({
-        "role": "user",
-        "content": message
-    })
-
-    conversation = [
-        {"role": "system", "content": SYSTEM_PROMPT}
-    ] + history[-12:]
+    history.append({"role": "user", "content": message})
 
     try:
-        answer = await asyncio.to_thread(
-            ask_openai,
-            conversation
-        )
-
-        history.append({
-            "role": "assistant",
-            "content": answer
-        })
-
+        answer = await asyncio.to_thread(ask_openai, history[-12:])
+        history.append({"role": "assistant", "content": answer})
         context.user_data["history"] = history[-12:]
-
         await update.message.reply_text(answer)
 
-    except urllib.error.HTTPError as error:
-        print("OpenAI HTTP error:", error.code)
+    except urllib.error.HTTPError:
         await update.message.reply_text(
-            "I'm having trouble connecting to my intelligence service, General. Please try again shortly."
+            "My intelligence service returned an error, General. "
+            "Please check system diagnostics."
         )
 
     except Exception as error:
-        print("AI error:", str(error))
+        print("GENERAL JARVIS ERROR:", repr(error), flush=True)
         await update.message.reply_text(
-            "An internal error occurred. My systems are still online, General."
+            "An internal connection error occurred, General."
         )
 
 
 def run_bot():
     if not TOKEN:
         raise RuntimeError("Telegram token is missing.")
-
     if not OPENAI_API_KEY:
         raise RuntimeError("OpenAI API key is missing.")
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
     application = Application.builder().token(TOKEN).build()
-
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("reset", reset_command))
-
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, respond)
     )
-
     application.run_polling(stop_signals=None)
 
 
 if __name__ == "__main__":
-    threading.Thread(
-        target=run_bot,
-        daemon=True
-    ).start()
-
+    threading.Thread(target=run_bot, daemon=True).start()
     app.run(
         host="0.0.0.0",
         port=int(os.environ.get("PORT", 10000))
