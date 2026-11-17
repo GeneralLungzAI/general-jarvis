@@ -148,7 +148,7 @@ def run_bot():
         MessageHandler(filters.TEXT & ~filters.COMMAND, respond)
     )
     loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+    asyncio.set_event_loop(loop)
     application.run_polling(stop_signals=None)
 
 
