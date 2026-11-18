@@ -1,18 +1,18 @@
 import os
-import sqlite3
-from pathlib import Path
-from datetime import datetime, timezone
 from contextlib import contextmanager
+from datetime import datetime, timezone
 
-DB_PATH = os.environ.get("JARVIS_DB_PATH", "jarvis.db")
+import psycopg2
+from psycopg2.extras import RealDictCursor
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 
 @contextmanager
 def _connect():
-    path = Path(DB_PATH)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path, timeout=10)
-    connection.row_factory = sqlite3.Row
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not configured.")
+    connection = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     try:
         yield connection
         connection.commit()
@@ -25,20 +25,21 @@ def _connect():
 
 def initialize():
     with _connect() as connection:
-        connection.execute("""
-            CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT NOT NULL,
-                title TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
-                created_at TEXT NOT NULL,
-                completed_at TEXT
-            )
-        """)
-        connection.execute("""
-            CREATE INDEX IF NOT EXISTS idx_tasks_user_status
-            ON tasks(user_id, status, id)
-        """)
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tasks (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at TIMESTAMPTZ NOT NULL,
+                    completed_at TIMESTAMPTZ
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_tasks_user_status
+                ON tasks(user_id, status, id)
+            """)
 
 
 def add_task(user_id, title):
@@ -49,41 +50,46 @@ def add_task(user_id, title):
         raise ValueError("Task title must be 500 characters or fewer.")
 
     with _connect() as connection:
-        cursor = connection.execute(
-            """INSERT INTO tasks (user_id, title, created_at)
-               VALUES (?, ?, ?)""",
-            (str(user_id), title, datetime.now(timezone.utc).isoformat())
-        )
-        return cursor.lastrowid
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """INSERT INTO tasks (user_id, title, created_at)
+                   VALUES (%s, %s, %s)
+                   RETURNING id""",
+                (str(user_id), title, datetime.now(timezone.utc))
+            )
+            return cursor.fetchone()["id"]
 
 
 def list_tasks(user_id, status="pending", limit=20):
     with _connect() as connection:
-        rows = connection.execute(
-            """SELECT id, title, status, created_at, completed_at
-               FROM tasks
-               WHERE user_id = ? AND status = ?
-               ORDER BY id DESC LIMIT ?""",
-            (str(user_id), status, limit)
-        ).fetchall()
-        return [dict(row) for row in rows]
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT id, title, status, created_at, completed_at
+                   FROM tasks
+                   WHERE user_id = %s AND status = %s
+                   ORDER BY id DESC LIMIT %s""",
+                (str(user_id), status, limit)
+            )
+            return [dict(row) for row in cursor.fetchall()]
 
 
 def complete_task(user_id, task_id):
     with _connect() as connection:
-        cursor = connection.execute(
-            """UPDATE tasks
-               SET status = 'completed', completed_at = ?
-               WHERE id = ? AND user_id = ? AND status = 'pending'""",
-            (datetime.now(timezone.utc).isoformat(), task_id, str(user_id))
-        )
-        return cursor.rowcount == 1
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """UPDATE tasks
+                   SET status = 'completed', completed_at = %s
+                   WHERE id = %s AND user_id = %s AND status = 'pending'""",
+                (datetime.now(timezone.utc), task_id, str(user_id))
+            )
+            return cursor.rowcount == 1
 
 
 def delete_task(user_id, task_id):
     with _connect() as connection:
-        cursor = connection.execute(
-            "DELETE FROM tasks WHERE id = ? AND user_id = ?",
-            (task_id, str(user_id))
-        )
-        return cursor.rowcount == 1
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM tasks WHERE id = %s AND user_id = %s",
+                (task_id, str(user_id))
+            )
+            return cursor.rowcount == 1
