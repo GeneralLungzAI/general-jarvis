@@ -73,7 +73,7 @@ def ask_openai(history, memories=None):
         )
     payload = {
         "model": MODEL,
-        "instructions": SYSTEM_PROMPT,
+        "instructions": instructions,
         "input": history,
         "max_output_tokens": 700
     }
