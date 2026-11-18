@@ -4,6 +4,7 @@ import asyncio
 import threading
 import urllib.request
 import urllib.error
+import traceback
 
 from flask import Flask
 from telegram import Update
@@ -214,33 +215,68 @@ async def respond(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-def run_bot():
-    if not TOKEN:
-        raise RuntimeError("Telegram token is missing.")
-    if not OPENAI_API_KEY:
-        raise RuntimeError("OpenAI API key is missing.")
-
-    initialize_task_store()
-
-    application = Application.builder().token(TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("reset", reset_command))
-    application.add_handler(CommandHandler("addtask", addtask_command))
-    application.add_handler(CommandHandler("tasks", tasks_command))
-    application.add_handler(CommandHandler("completed", completed_command))
-    application.add_handler(CommandHandler("done", done_command))
-    application.add_handler(CommandHandler("deltask", deltask_command))
-    application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, respond)
+async def telegram_post_init(application: Application):
+    # This hook runs only after Telegram bot initialization succeeds.
+    bot_info = await application.bot.get_me()
+    print(
+        f"[JARVIS] Telegram authenticated as @{bot_info.username} "
+        f"(bot_id={bot_info.id}).",
+        flush=True
     )
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    application.run_polling(stop_signals=None)
+
+
+def run_bot():
+    print("[JARVIS] Telegram worker starting.", flush=True)
+    try:
+        if not TOKEN:
+            raise RuntimeError("TELEGRAM_BOT_TOKEN is missing.")
+        if not OPENAI_API_KEY:
+            raise RuntimeError("OPENAI_API_KEY is missing.")
+
+        print("[JARVIS] Initializing Neon task database...", flush=True)
+        initialize_task_store()
+        print("[JARVIS] Neon task database initialized successfully.", flush=True)
+
+        application = (
+            Application.builder()
+            .token(TOKEN)
+            .post_init(telegram_post_init)
+            .build()
+        )
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("reset", reset_command))
+        application.add_handler(CommandHandler("addtask", addtask_command))
+        application.add_handler(CommandHandler("tasks", tasks_command))
+        application.add_handler(CommandHandler("completed", completed_command))
+        application.add_handler(CommandHandler("done", done_command))
+        application.add_handler(CommandHandler("deltask", deltask_command))
+        application.add_handler(
+            MessageHandler(filters.TEXT & ~filters.COMMAND, respond)
+        )
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        print("[JARVIS] Starting Telegram polling...", flush=True)
+        application.run_polling(stop_signals=None)
+
+    except Exception as error:
+        print(
+            f"[JARVIS] Telegram worker stopped with "
+            f"{type(error).__name__}: {error}",
+            flush=True
+        )
+        traceback.print_exc()
+        raise
 
 
 if __name__ == "__main__":
-    threading.Thread(target=run_bot, daemon=True).start()
+    print("[JARVIS] Starting web health server.", flush=True)
+    threading.Thread(
+        target=run_bot,
+        name="telegram-worker",
+        daemon=True
+    ).start()
     app.run(
         host="0.0.0.0",
         port=int(os.environ.get("PORT", 10000))
