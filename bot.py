@@ -1,4 +1,3 @@
-
 import os
 import json
 import asyncio
@@ -14,6 +13,14 @@ from telegram.ext import (
     MessageHandler,
     ContextTypes,
     filters,
+)
+
+from task_store import (
+    initialize as initialize_task_store,
+    add_task,
+    list_tasks,
+    complete_task,
+    delete_task,
 )
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -86,6 +93,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "GENERAL JARVIS ONLINE.\n"
         "Telegram connection established.\n"
+        "Task memory is ready.\n"
         "Awaiting instructions, General."
     )
 
@@ -95,15 +103,87 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "GENERAL JARVIS COMMANDS\n\n"
         "/start - Initialize Jarvis\n"
         "/help - Show commands\n"
-        "/reset - Clear conversation memory"
+        "/reset - Clear conversation memory\n"
+        "/addtask <task> - Save a task\n"
+        "/tasks - Show pending tasks\n"
+        "/done <id> - Mark a task complete\n"
+        "/completed - Show completed tasks\n"
+        "/deltask <id> - Delete a task"
     )
 
 
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["history"] = []
     await update.message.reply_text(
-        "Conversation memory cleared, General."
+        "Conversation memory cleared, General. Saved tasks remain intact."
     )
+
+
+async def addtask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    title = " ".join(context.args).strip()
+    if not title:
+        await update.message.reply_text(
+            "Give me a task to save. Example: /addtask Prepare the project roadmap"
+        )
+        return
+
+    try:
+        task_id = add_task(update.effective_user.id, title)
+        await update.message.reply_text(
+            f"Task saved, General.\nID: {task_id}\n{title}"
+        )
+    except ValueError as error:
+        await update.message.reply_text(str(error))
+
+
+async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tasks = list_tasks(update.effective_user.id, "pending")
+    if not tasks:
+        await update.message.reply_text("No pending tasks, General.")
+        return
+
+    lines = ["PENDING TASKS"]
+    lines.extend(f"#{task['id']} — {task['title']}" for task in tasks)
+    await update.message.reply_text("\n".join(lines))
+
+
+async def completed_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tasks = list_tasks(update.effective_user.id, "completed")
+    if not tasks:
+        await update.message.reply_text("No completed tasks recorded yet.")
+        return
+
+    lines = ["COMPLETED TASKS"]
+    lines.extend(f"#{task['id']} — {task['title']}" for task in tasks)
+    await update.message.reply_text("\n".join(lines))
+
+
+async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text("Usage: /done <task_id>")
+        return
+
+    task_id = int(context.args[0])
+    if complete_task(update.effective_user.id, task_id):
+        await update.message.reply_text(f"Task #{task_id} marked complete.")
+    else:
+        await update.message.reply_text(
+            "I couldn't find that pending task in your task list."
+        )
+
+
+async def deltask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text("Usage: /deltask <task_id>")
+        return
+
+    task_id = int(context.args[0])
+    if delete_task(update.effective_user.id, task_id):
+        await update.message.reply_text(f"Task #{task_id} deleted.")
+    else:
+        await update.message.reply_text(
+            "I couldn't find that task in your task list."
+        )
 
 
 async def respond(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -140,10 +220,17 @@ def run_bot():
     if not OPENAI_API_KEY:
         raise RuntimeError("OpenAI API key is missing.")
 
+    initialize_task_store()
+
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("reset", reset_command))
+    application.add_handler(CommandHandler("addtask", addtask_command))
+    application.add_handler(CommandHandler("tasks", tasks_command))
+    application.add_handler(CommandHandler("completed", completed_command))
+    application.add_handler(CommandHandler("done", done_command))
+    application.add_handler(CommandHandler("deltask", deltask_command))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, respond)
     )
