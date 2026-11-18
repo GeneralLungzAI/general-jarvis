@@ -2,16 +2,25 @@ import os
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone
+from contextlib import contextmanager
 
 DB_PATH = os.environ.get("JARVIS_DB_PATH", "jarvis.db")
 
 
+@contextmanager
 def _connect():
     path = Path(DB_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path, timeout=10)
     connection.row_factory = sqlite3.Row
-    return connection
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def initialize():
