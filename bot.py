@@ -126,7 +126,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "GENERAL JARVIS COMMANDS\n\n"
         "/start - Initialize Jarvis\n"
         "/help - Show commands\n"
-        "/reset - Clear conversation memory\n"
+        "/reset - Clear temporary conversation history\n"
         "/addtask <task> - Save a task\n"
         "/tasks - Show pending tasks\n"
         "/done <id> - Mark a task complete\n"
@@ -290,9 +290,18 @@ async def respond(update: Update, context: ContextTypes.DEFAULT_TYPE):
     history.append({"role": "user", "content": message})
 
     try:
-        memories = await asyncio.to_thread(
-            search_memories, update.effective_user.id, message
-        )
+        try:
+            memories = await asyncio.to_thread(
+                search_memories, update.effective_user.id, message
+            )
+        except Exception as memory_error:
+            print(
+                "[JARVIS] MEMORY RETRIEVAL ERROR:",
+                repr(memory_error),
+                flush=True
+            )
+            memories = []
+
         answer = await asyncio.to_thread(ask_openai, history[-12:], memories)
         history.append({"role": "assistant", "content": answer})
         context.user_data["history"] = history[-12:]
