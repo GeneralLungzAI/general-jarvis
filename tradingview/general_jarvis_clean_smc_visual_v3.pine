@@ -12,8 +12,8 @@ string webhookSecret = input.string("", "Webhook secret (32+ characters)", group
 bool sendBars = input.bool(true, "Send confirmed EURUSD candles", group=G_CONN)
 
 string G_TIME = "2. Tokyo session"
-string tokyoSession = input.session("0000-0600", "Tokyo session (00:00–06:00 JST)", group=G_TIME)
-string tokyoTimezone = "Asia/Tokyo"
+string tokyoSession = input.session("0300-0645", "Agent / Tokyo range (03:00–06:45 SAST)", group=G_TIME)
+string tokyoTimezone = "Africa/Johannesburg"
 
 string G_RULES = "3. Detection rules"
 int pivotLen = input.int(3, "Confirmed swing pivot length", minval=2, maxval=10, group=G_RULES)
@@ -123,9 +123,9 @@ if bullSweep
     bearSweepBar := na
 
 if showSweepMarks and bearSweep
-    label.new(bar_index, high, "LIQ SWEEP", style=label.style_label_down, color=color.new(color.orange, 8), textcolor=color.white, size=size.tiny)
+    line.new(bar_index, high, bar_index, bearSweepLevel, xloc=xloc.bar_index, color=color.orange, width=1, style=line.style_arrow_right)
 if showSweepMarks and bullSweep
-    label.new(bar_index, low, "LIQ SWEEP", style=label.style_label_up, color=color.new(color.aqua, 8), textcolor=color.black, size=size.tiny)
+    line.new(bar_index, low, bar_index, bullSweepLevel, xloc=xloc.bar_index, color=color.aqua, width=1, style=line.style_arrow_right)
 
 // ── Sequential M15 setup state ───────────────────────────────────────────────
 var int bullStage = 0
