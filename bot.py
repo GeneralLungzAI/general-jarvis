@@ -33,6 +33,8 @@ from task_store import (
     delete_task,
 )
 
+from tradingview_store import initialize as initialize_tradingview_store, save_event as save_tradingview_event
+
 from long_term_memory import (
     initialize as initialize_long_term_memory,
     save_memory,
@@ -376,7 +378,8 @@ async def _initialize_telegram():
     await asyncio.to_thread(initialize_task_store)
     await asyncio.to_thread(initialize_conversation_store)
     await asyncio.to_thread(initialize_long_term_memory)
-    print("[JARVIS] Neon task, conversation, and long-term memory stores initialized.", flush=True)
+    await asyncio.to_thread(initialize_tradingview_store)
+    print("[JARVIS] Neon task, conversation, long-term memory, and TradingView event stores initialized.", flush=True)
 
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
@@ -423,6 +426,44 @@ def _telegram_thread():
     finally:
         telegram_ready.clear()
         loop.close()
+
+
+@app.route("/tradingview/webhook", methods=["POST"])
+def tradingview_webhook():
+    """Authenticate, validate and durably queue TradingView events; never trade."""
+    expected_secret = os.environ.get("TRADINGVIEW_WEBHOOK_SECRET")
+    if not expected_secret:
+        return {"error": "TradingView integration is not configured"}, 503
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return {"error": "valid JSON object required"}, 400
+
+    supplied_secret = payload.pop("secret", "")
+    if not isinstance(supplied_secret, str) or not hmac.compare_digest(
+        supplied_secret, expected_secret
+    ):
+        return {"error": "unauthorized"}, 403
+
+    allowed_types = {"structure_candidate", "displacement_candidate", "context_update"}
+    if payload.get("event_type") not in allowed_types:
+        return {"error": "unsupported event_type"}, 400
+
+    try:
+        result = save_tradingview_event(payload)
+        if result["duplicate"]:
+            return {"ok": True, "duplicate": True}, 200
+        print(
+            f"[JARVIS] TRADINGVIEW_EVENT_STORED id={result['id']} "
+            f"tf={payload['timeframe']} type={payload['event_type']}",
+            flush=True,
+        )
+        return {"ok": True, "event_id": result["id"]}, 200
+    except ValueError as error:
+        return {"error": str(error)}, 400
+    except Exception as error:
+        print(f"[JARVIS] TRADINGVIEW_WEBHOOK_ERROR {type(error).__name__}", flush=True)
+        return {"error": "temporarily unavailable"}, 503
 
 
 @app.route("/telegram/webhook", methods=["POST"])
