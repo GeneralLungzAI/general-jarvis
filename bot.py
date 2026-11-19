@@ -41,6 +41,8 @@ app = Flask(__name__)
 telegram_application = None
 telegram_loop = None
 telegram_ready = threading.Event()
+telegram_start_lock = threading.Lock()
+telegram_worker_started = False
 
 SYSTEM_PROMPT = """
 You are GENERAL JARVIS, the AI assistant of GeneralLungz.
@@ -57,6 +59,22 @@ Your personality:
 
 
 @app.route("/")
+def _ensure_telegram_worker_started():
+    global telegram_worker_started
+    if telegram_worker_started:
+        return
+    with telegram_start_lock:
+        if not telegram_worker_started:
+            start_telegram_worker()
+            telegram_worker_started = True
+            print("[JARVIS] Telegram worker startup scheduled after HTTP server became reachable.", flush=True)
+
+
+@app.before_request
+def start_background_services_after_http_accepts_request():
+    _ensure_telegram_worker_started()
+
+
 def home():
     status = "READY" if telegram_ready.is_set() else "STARTING"
     return f"GENERAL JARVIS IS ONLINE — TELEGRAM {status}", 200
@@ -64,9 +82,12 @@ def home():
 
 @app.route("/health")
 def health():
-    if not telegram_ready.is_set():
-        return {"status": "starting"}, 503
-    return {"status": "ok", "telegram": "webhook"}, 200
+    # Liveness check: the HTTP process is healthy even while Telegram initializes.
+    # Telegram readiness is reported separately so slow external APIs cannot block deploys.
+    return {
+        "status": "ok",
+        "telegram": "webhook" if telegram_ready.is_set() else "starting"
+    }, 200
 
 
 def ask_openai(history):
@@ -347,5 +368,6 @@ if __name__ == "__main__":
         ],
     )
 else:
-    # One Gunicorn WSGI worker owns one asyncio loop for Telegram update handling.
-    start_telegram_worker()
+    # Telegram startup is deferred until the first HTTP request so Gunicorn can bind
+    # its public port before database and external Telegram API initialization begins.
+    pass
