@@ -33,7 +33,11 @@ from task_store import (
     delete_task,
 )
 
-from tradingview_store import initialize as initialize_tradingview_store, save_event as save_tradingview_event
+from tradingview_store import (
+    initialize as initialize_tradingview_store,
+    save_event as save_tradingview_event,
+    list_poi_candidates,
+)
 
 from long_term_memory import (
     initialize as initialize_long_term_memory,
@@ -455,10 +459,41 @@ def tradingview_webhook():
             return {"ok": True, "duplicate": True}, 200
         print(
             f"[JARVIS] TRADINGVIEW_EVENT_STORED id={result['id']} "
-            f"tf={payload['timeframe']} type={payload['event_type']}",
+            f"tf={payload['timeframe']} type={payload['event_type']} "
+            f"poi_id={result.get('poi_id')}",
             flush=True,
         )
-        return {"ok": True, "event_id": result["id"]}, 200
+        if result.get("poi_id") is not None:
+            chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+            if chat_id and telegram_application is not None and telegram_loop is not None:
+                direction = payload["poi_direction"].upper()
+                message = (
+                    f"GENERAL JARVIS — QUALIFIED EURUSD {direction} POI\\n"
+                    f"Timeframe: M15\\n"
+                    f"H4 bias: {payload['h4_bias']}\\n"
+                    f"OB: {payload['ob_low']} – {payload['ob_high']}\\n"
+                    f"IMB: {payload['imb_low']} – {payload['imb_high']}\\n"
+                    f"POI ID: {result['poi_id']}\\n"
+                    "Candidate only. No trade has been executed."
+                )
+                future = asyncio.run_coroutine_threadsafe(
+                    telegram_application.bot.send_message(
+                        chat_id=chat_id, text=message
+                    ),
+                    telegram_loop,
+                )
+                future.result(timeout=8)
+                print(
+                    f"[JARVIS] POI_TELEGRAM_ALERT_SENT poi_id={result['poi_id']}",
+                    flush=True,
+                )
+            else:
+                print(
+                    "[JARVIS] POI persisted; Telegram alert skipped because "
+                    "TELEGRAM_CHAT_ID or Telegram readiness is missing.",
+                    flush=True,
+                )
+        return {"ok": True, "event_id": result["id"], "poi_id": result.get("poi_id")}, 200
     except ValueError as error:
         return {"error": str(error)}, 400
     except Exception as error:
