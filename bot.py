@@ -95,23 +95,23 @@ def ask_openai(history):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["history"] = []
     await update.message.reply_text(
-        "GENERAL JARVIS ONLINE.\\n"
-        "Telegram connection established.\\n"
-        "Task memory is ready.\\n"
+        "GENERAL JARVIS ONLINE.\n"
+        "Telegram connection established.\n"
+        "Task memory is ready.\n"
         "Awaiting instructions, General."
     )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "GENERAL JARVIS COMMANDS\\n\\n"
-        "/start - Initialize Jarvis\\n"
-        "/help - Show commands\\n"
-        "/reset - Clear conversation memory\\n"
-        "/addtask <task> - Save a task\\n"
-        "/tasks - Show pending tasks\\n"
-        "/done <id> - Mark a task complete\\n"
-        "/completed - Show completed tasks\\n"
+        "GENERAL JARVIS COMMANDS\n\n"
+        "/start - Initialize Jarvis\n"
+        "/help - Show commands\n"
+        "/reset - Clear conversation memory\n"
+        "/addtask <task> - Save a task\n"
+        "/tasks - Show pending tasks\n"
+        "/done <id> - Mark a task complete\n"
+        "/completed - Show completed tasks\n"
         "/deltask <id> - Delete a task"
     )
 
@@ -134,7 +134,7 @@ async def addtask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         task_id = add_task(update.effective_user.id, title)
         await update.message.reply_text(
-            f"Task saved, General.\\nID: {task_id}\\n{title}"
+            f"Task saved, General.\nID: {task_id}\n{title}"
         )
     except ValueError as error:
         await update.message.reply_text(str(error))
@@ -148,7 +148,7 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines = ["PENDING TASKS"]
     lines.extend(f"#{task['id']} — {task['title']}" for task in tasks)
-    await update.message.reply_text("\\n".join(lines))
+    await update.message.reply_text("\n".join(lines))
 
 
 async def completed_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -159,7 +159,7 @@ async def completed_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines = ["COMPLETED TASKS"]
     lines.extend(f"#{task['id']} — {task['title']}" for task in tasks)
-    await update.message.reply_text("\\n".join(lines))
+    await update.message.reply_text("\n".join(lines))
 
 
 async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
