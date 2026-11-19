@@ -17,8 +17,12 @@ class TradingViewWebhookTests(unittest.TestCase):
             "event_id": "tv-test-1",
             "symbol": "EURUSD",
             "timeframe": "1",
-            "event_type": "structure_candidate",
+            "event_type": "closed_bar",
             "bar_time": 1795000000,
+            "open": 1.0800,
+            "high": 1.0810,
+            "low": 1.0790,
+            "close": 1.0805,
         }
 
     def tearDown(self):
