@@ -113,20 +113,22 @@ def process_closed_bar(event):
                 return notices
 
             direction = poi["direction"]
-            invalidated = (direction == "bullish" and c < poi["ob_low"]) or (
+            incoming_h4 = event.get("h4_bias")
+            h4_reversed = incoming_h4 in ("bullish", "bearish") and incoming_h4 != poi["h4_bias"]
+            price_invalidated = (direction == "bullish" and c < poi["ob_low"]) or (
                 direction == "bearish" and c > poi["ob_high"]
             )
-            if invalidated:
+            if h4_reversed or price_invalidated:
+                reason = "h4_bias_changed" if h4_reversed else "closed_bar_beyond_ob_boundary"
                 cur.execute("""
                     UPDATE poi_candidates
                     SET status='invalidated', invalidated_at=%s,
-                        invalidation_reason='closed_bar_beyond_ob_boundary',
-                        updated_at=NOW()
+                        invalidation_reason=%s, updated_at=NOW()
                     WHERE id=%s AND status IN ('active','mitigated')
-                """, (event["bar_time"], poi["id"]))
+                """, (event["bar_time"], reason, poi["id"]))
                 notices.append({
                     "type": "invalidated", "poi_id": poi["id"],
-                    "direction": direction, "close": c
+                    "direction": direction, "close": c, "reason": reason
                 })
                 return notices
 
@@ -173,10 +175,19 @@ def process_closed_bar(event):
             def latest(items):
                 return max(items, key=lambda x: x.candle_timestamp) if items else None
 
-            m1 = latest(events_m1)
+            # Retain the latest eligible M1 MSS as the trigger even if a later
+            # same-direction continuation break is labelled BOS. A later
+            # opposite-direction structural event cancels that trigger.
+            m1_candidates = [
+                item for item in events_m1
+                if item.event == "MSS" and item.eligible and item.direction == direction
+            ]
+            m1 = latest(m1_candidates)
+            m1_latest_any = latest(events_m1)
             m3 = latest(events_m3)
             m5 = latest(events_m5)
-            if not m1 or m1.event != "MSS" or not m1.eligible or m1.direction != direction:
+            if not m1 or (m1_latest_any and m1_latest_any.direction != direction and
+                          m1_latest_any.candle_timestamp > m1.candle_timestamp):
                 return notices
             if not m3 or not m3.eligible or m3.direction != direction:
                 return notices
