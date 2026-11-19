@@ -43,6 +43,9 @@ from tradingview_store import (
     mark_event_processed,
     mark_event_failed,
     get_poi_id_for_event,
+    claim_pending_notifications,
+    mark_notification_sent,
+    mark_notification_failed,
 )
 
 from tradingview_processor import (
@@ -602,33 +605,20 @@ def _send_trading_notice(notice, payload, poi_id=None):
 
 
 def _tradingview_event_worker():
-    """Process durable TradingView inbox rows outside the 3-second webhook request."""
-    print("[JARVIS] TradingView durable event worker started.", flush=True)
+    """Process durable webhook inbox and Telegram outbox independently."""
+    print("[JARVIS] TradingView durable event/notification worker started.", flush=True)
     while True:
         try:
-            # Keep durable events pending until a Telegram destination is
-            # configured; otherwise POI/mitigation notices could be discarded.
-            if not os.environ.get("TELEGRAM_CHAT_ID"):
-                time.sleep(3)
-                continue
             events = claim_pending_events(limit=10)
-            if not events:
-                time.sleep(1)
-                continue
             for item in events:
                 event_id = item["event_id"]
                 payload = item["payload"]
                 try:
                     notices = process_closed_bar(payload)
-                    poi_id = get_poi_id_for_event(event_id)
-                    if poi_id is not None:
-                        _send_trading_notice({}, payload, poi_id=poi_id)
-                    for notice in notices:
-                        _send_trading_notice(notice, payload)
                     mark_event_processed(event_id)
                     print(
                         f"[JARVIS] TRADINGVIEW_EVENT_PROCESSED event_id={event_id} "
-                        f"notices={len(notices)} poi_id={poi_id}",
+                        f"lifecycle_events={len(notices)}",
                         flush=True,
                     )
                 except Exception as error:
@@ -638,6 +628,48 @@ def _tradingview_event_worker():
                         f"event_id={event_id} type={type(error).__name__}: {error}",
                         flush=True,
                     )
+
+            # Do not claim notifications until the owner has configured a
+            # destination and the Telegram bot is ready. Outbox rows remain
+            # durable and pending instead of silently disappearing.
+            notifications = []
+            if os.environ.get("TELEGRAM_CHAT_ID") and telegram_ready.is_set():
+                notifications = claim_pending_notifications(limit=10)
+                for item in notifications:
+                    try:
+                        payload = item["payload"]
+                        if payload["type"] == "poi_created":
+                            sent = _send_trading_notice(
+                                {}, payload["event"], poi_id=payload["poi_id"]
+                            )
+                        else:
+                            sent = _send_trading_notice(
+                                payload["notice"], payload["event"]
+                            )
+                        if sent:
+                            mark_notification_sent(item["id"])
+                            print(
+                                f"[JARVIS] TELEGRAM_ALERT_SENT "
+                                f"key={item['notification_key']}",
+                                flush=True,
+                            )
+                        else:
+                            mark_notification_failed(
+                                item["id"], "Telegram send returned false"
+                            )
+                    except Exception as error:
+                        mark_notification_failed(
+                            item["id"], f"{type(error).__name__}: {error}"
+                        )
+                        print(
+                            f"[JARVIS] TELEGRAM_OUTBOX_ERROR "
+                            f"key={item['notification_key']} "
+                            f"type={type(error).__name__}: {error}",
+                            flush=True,
+                        )
+
+            if not events and not notifications:
+                time.sleep(1)
         except Exception as error:
             print(
                 f"[JARVIS] TRADINGVIEW_WORKER_ERROR {type(error).__name__}: {error}",
