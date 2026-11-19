@@ -260,8 +260,8 @@ def claim_pending_events(limit=10):
                         )
                       )
                     ORDER BY id
-                    FOR UPDATE SKIP LOCKED
                     LIMIT %s
+                    FOR UPDATE SKIP LOCKED
                 )
                 UPDATE tradingview_events AS event
                 SET processing_status = 'processing',
@@ -326,8 +326,8 @@ def claim_pending_notifications(limit=10):
                         OR (status='processing' AND claimed_at < NOW() - INTERVAL '2 minutes')
                     )
                     ORDER BY id
-                    FOR UPDATE SKIP LOCKED
                     LIMIT %s
+                    FOR UPDATE SKIP LOCKED
                 )
                 UPDATE tradingview_notifications AS notification
                 SET status='processing', attempts=attempts+1, claimed_at=NOW()
