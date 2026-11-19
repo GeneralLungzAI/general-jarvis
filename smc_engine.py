@@ -198,7 +198,7 @@ def detect_structure_events(
             displacement = not any(r in reasons for r in (
                 "body_below_threshold", "range_below_threshold", "weak_close_location"
             ))
-            event = "MSS" if trend in ("bullish", "bearish") and trend != direction else "BOS"
+            event = ("MSS" if trend != direction else "BOS") if trend in ("bullish", "bearish") else "BREAK"
             eligible = displacement and extension <= config.max_extension_atr
             events.append(StructureEvent(
                 timeframe=timeframe, direction=direction, event=event,
