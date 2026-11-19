@@ -151,13 +151,24 @@ def process_closed_bar(event):
             if poi["status"] != "mitigated" or not poi["mitigated_at"]:
                 return notices
 
+            # Include pre-mitigation candles to establish confirmed swing context,
+            # but only accept structure events whose candle closes at/after mitigation.
+            # A fixed bounded history keeps the per-webhook computation predictable.
             cur.execute("""
+                WITH ranked AS (
+                    SELECT timeframe, bar_time, open, high, low, close,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY timeframe ORDER BY bar_time DESC
+                           ) AS rn
+                    FROM tradingview_ltf_bars
+                    WHERE symbol='EURUSD' AND timeframe IN ('1','3','5')
+                      AND bar_time <= %s
+                )
                 SELECT timeframe, bar_time, open, high, low, close
-                FROM tradingview_ltf_bars
-                WHERE symbol='EURUSD' AND timeframe IN ('1','3','5')
-                  AND bar_time >= %s
+                FROM ranked
+                WHERE rn <= 500
                 ORDER BY timeframe, bar_time ASC
-            """, (poi["mitigated_at"],))
+            """, (event["bar_time"],))
             rows = cur.fetchall()
             by_tf = {"M1": [], "M3": [], "M5": []}
             for row in rows:
@@ -168,24 +179,37 @@ def process_closed_bar(event):
                 ))
 
             prior_m1 = "bearish" if direction == "bullish" else "bullish"
-            events_m1 = _latest_events(by_tf["M1"], "M1", prior_m1)
+            # Establish the M1 trend from the latest structural break BEFORE
+            # mitigation. If no prior trend can be established, fail closed:
+            # do not manufacture an MSS from an unknown state.
+            m1_context_events = _latest_events(by_tf["M1"], "M1", "unknown")
+            pre_mitigation = [
+                item for item in m1_context_events
+                if item.candle_timestamp < poi["mitigated_at"]
+            ]
+            established_m1_trend = latest(pre_mitigation).direction if pre_mitigation else None
+            events_m1 = (
+                _latest_events(by_tf["M1"], "M1", established_m1_trend)
+                if established_m1_trend in ("bullish", "bearish") else []
+            )
             events_m3 = _latest_events(by_tf["M3"], "M3", direction)
             events_m5 = _latest_events(by_tf["M5"], "M5", direction)
 
             def latest(items):
                 return max(items, key=lambda x: x.candle_timestamp) if items else None
 
-            # Retain the latest eligible M1 MSS as the trigger even if a later
-            # same-direction continuation break is labelled BOS. A later
-            # opposite-direction structural event cancels that trigger.
+            # Only events closing after mitigation count toward confirmation.
+            post_mit_m1 = [item for item in events_m1 if item.candle_timestamp >= poi["mitigated_at"]]
+            post_mit_m3 = [item for item in events_m3 if item.candle_timestamp >= poi["mitigated_at"]]
+            post_mit_m5 = [item for item in events_m5 if item.candle_timestamp >= poi["mitigated_at"]]
             m1_candidates = [
-                item for item in events_m1
+                item for item in post_mit_m1
                 if item.event == "MSS" and item.eligible and item.direction == direction
             ]
             m1 = latest(m1_candidates)
-            m1_latest_any = latest(events_m1)
-            m3 = latest(events_m3)
-            m5 = latest(events_m5)
+            m1_latest_any = latest(post_mit_m1)
+            m3 = latest(post_mit_m3)
+            m5 = latest(post_mit_m5)
             if not m1 or (m1_latest_any and m1_latest_any.direction != direction and
                           m1_latest_any.candle_timestamp > m1.candle_timestamp):
                 return notices
