@@ -141,7 +141,7 @@ def save_event(event):
                 cursor.execute("""
                     UPDATE poi_candidates
                     SET status = 'expired', updated_at = NOW()
-                    WHERE symbol = %s AND timeframe = '15' AND status = 'active'
+                    WHERE symbol = %s AND timeframe = '15' AND status IN ('active', 'mitigated')
                 """, (str(event["symbol"]).upper(),))
                 cursor.execute("""
                     INSERT INTO poi_candidates
