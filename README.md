@@ -6,7 +6,7 @@ General JARVIS is a Telegram-based AI assistant built to grow into an authorised
 
 - Conversational AI through the OpenAI Responses API.
 - Telegram commands for task management.
-- SQLite-backed tasks that survive bot process restarts when the database file is stored on persistent storage.
+- PostgreSQL/Neon-backed tasks, conversation history, and long-term memory (user-scoped).
 - Tasks are scoped to the Telegram user who created them.
 
 ## Telegram task commands
