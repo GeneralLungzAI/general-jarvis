@@ -37,6 +37,7 @@ from tradingview_store import (
     initialize as initialize_tradingview_store,
     save_event as save_tradingview_event,
     list_poi_candidates,
+    database_status,
 )
 
 from long_term_memory import (
@@ -383,7 +384,13 @@ async def _initialize_telegram():
     await asyncio.to_thread(initialize_conversation_store)
     await asyncio.to_thread(initialize_long_term_memory)
     await asyncio.to_thread(initialize_tradingview_store)
-    print("[JARVIS] Neon task, conversation, long-term memory, and TradingView event stores initialized.", flush=True)
+    db_status = await asyncio.to_thread(database_status)
+    print(
+        "[JARVIS] DATABASE_URL PostgreSQL connection verified "
+        f"host={db_status['host']} database={db_status['database']} user={db_status['user']}.",
+        flush=True,
+    )
+    print("[JARVIS] Neon task, conversation, long-term memory, TradingView event, and POI stores initialized.", flush=True)
 
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
