@@ -97,9 +97,10 @@ def delete_task(user_id, task_id):
             return cursor.rowcount == 1
 
 
-# A session-scoped PostgreSQL advisory lock prevents overlapping Render
-# instances from polling Telegram with the same bot token. The key is the
-# Telegram bot ID, so it remains stable across token rotations.
+# A transaction-scoped PostgreSQL advisory lock prevents overlapping Render
+# instances from polling Telegram with the same bot token. Keeping the lock
+# transaction open also works with Neon pooled (transaction-pooling) endpoints.
+# The key is stable across bot-token rotations.
 TELEGRAM_POLLING_LOCK_KEY = 9292355243
 
 
@@ -124,12 +125,11 @@ def acquire_telegram_polling_lock(retry_seconds=5):
         connection = None
         try:
             connection = _polling_lock_connection()
-            # Session-level advisory locks survive transaction boundaries and
-            # are released automatically when PostgreSQL detects disconnect.
-            connection.autocommit = True
+            # Keep autocommit disabled: the transaction-scoped lock remains
+            # held on this dedicated connection until rollback/close.
             with connection.cursor() as cursor:
                 cursor.execute(
-                    "SELECT pg_try_advisory_lock(%s)",
+                    "SELECT pg_try_advisory_xact_lock(%s)",
                     (TELEGRAM_POLLING_LOCK_KEY,)
                 )
                 acquired = cursor.fetchone()[0]
@@ -222,20 +222,9 @@ def release_telegram_polling_lock(
 
     try:
         try:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    "SELECT pg_advisory_unlock(%s)",
-                    (TELEGRAM_POLLING_LOCK_KEY,)
-                )
-                released = cursor.fetchone()[0]
-
-            if not released:
-                print(
-                    "[JARVIS] CRITICAL: Neon reports that the polling lock "
-                    "was not held during shutdown. Exiting.",
-                    flush=True
-                )
-                os._exit(1)
+            # Rolling back ends the lock-owning transaction and releases
+            # the advisory lock. Closing then returns the connection cleanly.
+            connection.rollback()
         finally:
             connection.close()
     finally:
