@@ -47,6 +47,32 @@ def initialize():
                 CREATE INDEX IF NOT EXISTS idx_tradingview_events_received
                 ON tradingview_events(received_at DESC)
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS poi_candidates (
+                    id BIGSERIAL PRIMARY KEY,
+                    event_id TEXT NOT NULL UNIQUE REFERENCES tradingview_events(event_id) ON DELETE CASCADE,
+                    symbol TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    direction TEXT NOT NULL CHECK (direction IN ('bullish', 'bearish')),
+                    h4_bias TEXT NOT NULL,
+                    bar_time BIGINT NOT NULL,
+                    ob_high DOUBLE PRECISION NOT NULL,
+                    ob_low DOUBLE PRECISION NOT NULL,
+                    imb_high DOUBLE PRECISION NOT NULL,
+                    imb_low DOUBLE PRECISION NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active'
+                        CHECK (status IN ('active', 'mitigated', 'invalidated', 'expired')),
+                    payload JSONB NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    CHECK (ob_high > ob_low),
+                    CHECK (imb_high > imb_low)
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_poi_candidates_status_created
+                ON poi_candidates(status, created_at DESC)
+            """)
 
 
 def save_event(event):
@@ -91,5 +117,39 @@ def save_event(event):
                 event["bar_time"], Json(event)
             ))
             row = cursor.fetchone()
-            return {"stored": row is not None, "duplicate": row is None,
-                    "id": row["id"] if row else None}
+            event_stored = row is not None
+            poi_id = None
+            if event_stored and event.get("poi_candidate") is True:
+                if event.get("timeframe") != "15":
+                    raise ValueError("POI candidates are accepted only from M15 events.")
+                direction = event.get("poi_direction")
+                h4_bias = event.get("h4_bias")
+                try:
+                    ob_high = float(event["ob_high"])
+                    ob_low = float(event["ob_low"])
+                    imb_high = float(event["imb_high"])
+                    imb_low = float(event["imb_low"])
+                except (KeyError, TypeError, ValueError):
+                    raise ValueError("POI candidate requires numeric OB and IMB boundaries.")
+                if direction not in ("bullish", "bearish") or h4_bias != direction:
+                    raise ValueError("POI direction must agree with confirmed H4 bias.")
+                if not all(math.isfinite(v) for v in (ob_high, ob_low, imb_high, imb_low)):
+                    raise ValueError("POI price boundaries must be finite.")
+                if ob_high <= ob_low or imb_high <= imb_low:
+                    raise ValueError("POI zone boundaries are inverted or empty.")
+                cursor.execute("""
+                    INSERT INTO poi_candidates
+                        (event_id, symbol, timeframe, direction, h4_bias, bar_time,
+                         ob_high, ob_low, imb_high, imb_low, payload)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (event_id) DO NOTHING
+                    RETURNING id
+                """, (
+                    str(event["event_id"]), str(event["symbol"]).upper(),
+                    str(event["timeframe"]), direction, h4_bias, event["bar_time"],
+                    ob_high, ob_low, imb_high, imb_low, Json(event)
+                ))
+                poi_row = cursor.fetchone()
+                poi_id = poi_row["id"] if poi_row else None
+            return {"stored": event_stored, "duplicate": not event_stored,
+                    "id": row["id"] if row else None, "poi_id": poi_id}
