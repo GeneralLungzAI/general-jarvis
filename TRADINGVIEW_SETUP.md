@@ -39,7 +39,8 @@ The bridge uses `alert.freq_once_per_bar_close`; do not select a separate price-
 
 1. GitHub Actions Python compile and unit tests pass.
 2. Render latest deploy is live and `/health` reports Telegram, webhook secret, and processor readiness.
-3. Telegram `/tasks`, `/addtask`, `/done`, `/remember`, and `/memories` work with persistent Neon records.
+3. If `telegram_chat_configured` is false on `/health`, send `/chatid` to the bot and set the returned value as `TELEGRAM_CHAT_ID` in Render Environment, then allow the service to redeploy.
+4. Telegram `/tasks`, `/addtask`, `/done`, `/remember`, and `/memories` work with persistent Neon records.
 4. A TradingView alert delivers a confirmed EURUSD bar and Render logs show it stored.
 5. A valid M15 POI is persisted once; a duplicate webhook does not create a second record.
 6. A replayed LTF bar marks mitigation; invalidation and LTF confirmation paths are exercised in a controlled test.
