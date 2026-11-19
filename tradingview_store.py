@@ -173,3 +173,21 @@ def list_poi_candidates(status="active", limit=20):
                 LIMIT %s
             """, (status, limit))
             return [dict(row) for row in cursor.fetchall()]
+
+
+def database_status():
+    """Verify the configured application DATABASE_URL reaches PostgreSQL."""
+    from urllib.parse import urlparse
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not configured.")
+    parsed = urlparse(DATABASE_URL)
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT current_database() AS database_name, current_user AS database_user")
+            row = cursor.fetchone()
+    return {
+        "connected": True,
+        "host": parsed.hostname,
+        "database": row["database_name"],
+        "user": row["database_user"],
+    }
