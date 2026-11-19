@@ -1,56 +1,227 @@
 //@version=6
-indicator("GENERAL JARVIS — EURUSD Data Bridge + M15 IMB Candidate", overlay=true)
+indicator("GENERAL JARVIS — EURUSD Structure + POI Bridge", overlay=true, max_boxes_count=100, max_labels_count=100)
 
-// SECURITY:
-// Use a random alphanumeric secret of at least 32 characters.
-// Set the identical value in Render as TRADINGVIEW_WEBHOOK_SECRET.
-// Do not put broker credentials or account passwords here.
-webhookSecret = input.string("", "JARVIS webhook secret")
-sendBars = input.bool(true, "Send confirmed EURUSD candles")
-showImb = input.bool(true, "Mark M15 imbalance candidates")
+// GENERAL LUNGZ RULESET:
+// H4 structural bias -> M15 structure, liquidity and POI -> LTF confirmation.
+// A valid M15 POI candidate requires a completed liquidity sweep, confirmed
+// MSS close through a confirmed swing, displacement, a three-candle IMB,
+// and the last opposing candle belonging to that displacement leg.
+// Candidate only: this script never authorises or executes a trade.
 
-// TradingView symbol IDs vary by broker/feed (e.g. EURUSD, OANDA:EURUSD).
-tickerUpper = str.upper(syminfo.ticker)
-tickerIdUpper = str.upper(syminfo.tickerid)
-isEurUsd = str.contains(tickerUpper, "EURUSD") or str.contains(tickerIdUpper, "EURUSD")
-validTf = timeframe.period == "1" or timeframe.period == "3" or timeframe.period == "5" or timeframe.period == "15" or timeframe.period == "60" or timeframe.period == "240"
-secretReady = str.length(webhookSecret) >= 32
+// ── Inputs ───────────────────────────────────────────────────────────────────
+string G_SECURITY = "1. JARVIS connection"
+string webhookSecret = input.string("", "Webhook secret (32+ random characters)", group=G_SECURITY)
+bool sendBars = input.bool(true, "Send confirmed EURUSD candles", group=G_SECURITY)
 
-// Three-candle fair-value-gap / imbalance candidate.
-// Bullish: current low is above the high two candles back.
-// Bearish: current high is below the low two candles back.
-// These are candidates only; an OB, HTF bias, liquidity and freshness
-// must still be independently confirmed by the JARVIS engine.
-bullishImb = timeframe.period == "15" and bar_index >= 2 and low > high[2]
-bearishImb = timeframe.period == "15" and bar_index >= 2 and high < low[2]
-imbCandidate = showImb and (bullishImb or bearishImb)
-imbLow = bullishImb ? high[2] : bearishImb ? high : na
-imbHigh = bullishImb ? low : bearishImb ? low[2] : na
-imbDirection = bullishImb ? "bullish" : bearishImb ? "bearish" : "none"
+string G_STRUCTURE = "2. Structure"
+int pivotLen = input.int(3, "Confirmed swing pivot length", minval=2, maxval=10, group=G_STRUCTURE)
+int sweepLife = input.int(12, "M15 bars allowed after sweep for MSS", minval=1, maxval=50, group=G_STRUCTURE)
+int obLookback = input.int(10, "Opposing candle search before displacement", minval=2, maxval=30, group=G_STRUCTURE)
+int atrLen = input.int(14, "ATR length", minval=2, maxval=100, group=G_STRUCTURE)
+float displacementATR = input.float(1.2, "Displacement body >= ATR x", minval=0.2, maxval=5.0, step=0.1, group=G_STRUCTURE)
+float minBodyRatio = input.float(0.60, "Minimum body / candle range", minval=0.3, maxval=0.95, step=0.05, group=G_STRUCTURE)
 
-plotshape(imbCandidate and barstate.isconfirmed, title="M15 IMB candidate", style=shape.diamond, location=location.abovebar, size=size.tiny, color=color.aqua, text="IMB")
+string G_LIQ = "3. Liquidity"
+string tokyoSession = input.session("0000-0600", "Tokyo liquidity window", group=G_LIQ)
+string tokyoTimezone = input.string("Asia/Tokyo", "Tokyo timezone", group=G_LIQ)
+bool useTokyo = input.bool(true, "Use completed Tokyo range", group=G_LIQ)
+bool usePrevDay = input.bool(true, "Use previous-day high/low", group=G_LIQ)
 
-// One authenticated event per confirmed candle. Optional IMB metadata is
-// attached to the same event so the bridge never emits two competing alerts
-// for one bar close.
+string G_DISPLAY = "4. Display"
+bool showLiquidity = input.bool(true, "Show liquidity levels", group=G_DISPLAY)
+bool showPOI = input.bool(true, "Draw qualified M15 OB + IMB", group=G_DISPLAY)
+bool showDashboard = input.bool(true, "Show structure dashboard", group=G_DISPLAY)
+
+// ── Symbol/timeframe guards ──────────────────────────────────────────────────
+string tickerUpper = str.upper(syminfo.ticker)
+string tickerIdUpper = str.upper(syminfo.tickerid)
+bool isEurUsd = str.contains(tickerUpper, "EURUSD") or str.contains(tickerIdUpper, "EURUSD")
+bool validTf = timeframe.period == "1" or timeframe.period == "3" or timeframe.period == "5" or timeframe.period == "15" or timeframe.period == "60" or timeframe.period == "240"
+bool isM15 = timeframe.period == "15"
+bool secretReady = str.length(webhookSecret) >= 32
+
+// ── Confirmed H4 structural bias (only a closed H4 candle can change it) ─────
+f_structureBias() =>
+    float pH = ta.pivothigh(high, pivotLen, pivotLen)
+    float pL = ta.pivotlow(low, pivotLen, pivotLen)
+    var float lastH = na
+    var float lastL = na
+    var int direction = 0
+    if not na(pH)
+        lastH := pH
+    if not na(pL)
+        lastL := pL
+    if not na(lastH) and close > lastH
+        direction := 1
+    else if not na(lastL) and close < lastL
+        direction := -1
+    direction
+
+int h4Bias = request.security(syminfo.tickerid, "240", f_structureBias()[1], barmerge.gaps_off, barmerge.lookahead_on)
+
+// ── Tokyo and previous-day liquidity ─────────────────────────────────────────
+bool inTokyo = not na(time(timeframe.period, tokyoSession, tokyoTimezone))
+bool tokyoStart = inTokyo and not inTokyo[1]
+bool tokyoEnd = not inTokyo and inTokyo[1]
+var float tokyoHigh = na
+var float tokyoLow = na
+var bool tokyoComplete = false
+if tokyoStart
+    tokyoHigh := high
+    tokyoLow := low
+    tokyoComplete := false
+else if inTokyo
+    tokyoHigh := math.max(nz(tokyoHigh, high), high)
+    tokyoLow := math.min(nz(tokyoLow, low), low)
+if tokyoEnd
+    tokyoComplete := true
+
+float pdh = request.security(syminfo.tickerid, "D", high[1], barmerge.gaps_off, barmerge.lookahead_on)
+float pdl = request.security(syminfo.tickerid, "D", low[1], barmerge.gaps_off, barmerge.lookahead_on)
+plot(showLiquidity and tokyoComplete ? tokyoHigh : na, "Tokyo High", color=color.orange, linewidth=2, style=plot.style_linebr)
+plot(showLiquidity and tokyoComplete ? tokyoLow : na, "Tokyo Low", color=color.aqua, linewidth=2, style=plot.style_linebr)
+plot(showLiquidity ? pdh : na, "Previous Day High", color=color.fuchsia, style=plot.style_linebr)
+plot(showLiquidity ? pdl : na, "Previous Day Low", color=color.yellow, style=plot.style_linebr)
+
+// ── M15 POI detection: do not manufacture M15 zones from other timeframes ───
+float swingPH = ta.pivothigh(high, pivotLen, pivotLen)
+float swingPL = ta.pivotlow(low, pivotLen, pivotLen)
+var float lastSwingHigh = na
+var float lastSwingLow = na
+if not na(swingPH)
+    lastSwingHigh := swingPH
+if not na(swingPL)
+    lastSwingLow := swingPL
+
+bool sweepHighTokyo = isM15 and barstate.isconfirmed and useTokyo and tokyoComplete and not na(tokyoHigh) and high > tokyoHigh and close < tokyoHigh
+bool sweepLowTokyo = isM15 and barstate.isconfirmed and useTokyo and tokyoComplete and not na(tokyoLow) and low < tokyoLow and close > tokyoLow
+bool sweepHighPD = isM15 and barstate.isconfirmed and usePrevDay and high > pdh and close < pdh
+bool sweepLowPD = isM15 and barstate.isconfirmed and usePrevDay and low < pdl and close > pdl
+bool bearishSweep = sweepHighTokyo or sweepHighPD
+bool bullishSweep = sweepLowTokyo or sweepLowPD
+
+var int lastBearSweepBar = na
+var int lastBullSweepBar = na
+if bearishSweep
+    lastBearSweepBar := bar_index
+if bullishSweep
+    lastBullSweepBar := bar_index
+bool bearSweepFresh = not na(lastBearSweepBar) and bar_index - lastBearSweepBar <= sweepLife
+bool bullSweepFresh = not na(lastBullSweepBar) and bar_index - lastBullSweepBar <= sweepLife
+
+// MSS is a confirmed close through the latest confirmed opposing swing,
+// and must follow the matching liquidity sweep.
+bool bullishMSS = isM15 and barstate.isconfirmed and bullSweepFresh and not na(lastSwingHigh) and ta.crossover(close, lastSwingHigh)
+bool bearishMSS = isM15 and barstate.isconfirmed and bearSweepFresh and not na(lastSwingLow) and ta.crossunder(close, lastSwingLow)
+
+// ── Displacement + 3-candle imbalance ────────────────────────────────────────
+float atr = ta.atr(atrLen)
+float candleRange = math.max(high - low, syminfo.mintick)
+float body = math.abs(close - open)
+bool strongBody = body >= atr * displacementATR and body / candleRange >= minBodyRatio
+bool bullishDisplacement = close > open and strongBody
+bool bearishDisplacement = close < open and strongBody
+bool bullishIMB = bar_index >= 2 and low > high[2]
+bool bearishIMB = bar_index >= 2 and high < low[2]
+
+// ── Refined OB: last opposing candle in the MSS displacement leg ─────────────
+// Use full candle range to preserve the original v1 marking convention.
+// Reject a candidate if price traded back through that candle's full range
+// between its origin and the confirmed MSS/displacement candle.
+float bullObTop = na
+float bullObBottom = na
+int bullObOffset = na
+bool bullObUntouched = false
+if bullishMSS and bullishDisplacement and bullishIMB
+    for i = 1 to obLookback
+        if na(bullObOffset) and close[i] < open[i]
+            bool untouched = true
+            for j = 0 to i - 1
+                if low[j] <= high[i] and high[j] >= low[i]
+                    untouched := false
+            if untouched
+                bullObTop := high[i]
+                bullObBottom := low[i]
+                bullObOffset := i
+                bullObUntouched := true
+
+float bearObTop = na
+float bearObBottom = na
+int bearObOffset = na
+bool bearObUntouched = false
+if bearishMSS and bearishDisplacement and bearishIMB
+    for i = 1 to obLookback
+        if na(bearObOffset) and close[i] > open[i]
+            bool untouched = true
+            for j = 0 to i - 1
+                if low[j] <= high[i] and high[j] >= low[i]
+                    untouched := false
+            if untouched
+                bearObTop := high[i]
+                bearObBottom := low[i]
+                bearObOffset := i
+                bearObUntouched := true
+
+bool bullishH4Aligned = h4Bias == 1
+bool bearishH4Aligned = h4Bias == -1
+bool bullishPOI = isM15 and barstate.isconfirmed and bullishMSS and bullishDisplacement and bullishIMB and bullObUntouched and bullishH4Aligned
+bool bearishPOI = isM15 and barstate.isconfirmed and bearishMSS and bearishDisplacement and bearishIMB and bearObUntouched and bearishH4Aligned
+
+// ── Draw only qualified structure-linked OB + IMB zones ──────────────────────
+if showPOI and bullishPOI
+    box.new(left=bar_index-bullObOffset, top=bullObTop, right=bar_index+1, bottom=bullObBottom, extend=extend.right, border_color=color.lime, bgcolor=color.new(color.lime, 87), text="OB+ | H4 aligned", text_color=color.lime)
+    box.new(left=bar_index-2, top=low, right=bar_index+1, bottom=high[2], extend=extend.right, border_color=color.aqua, bgcolor=color.new(color.aqua, 88), text="IMB+", text_color=color.aqua)
+if showPOI and bearishPOI
+    box.new(left=bar_index-bearObOffset, top=bearObTop, right=bar_index+1, bottom=bearObBottom, extend=extend.right, border_color=color.red, bgcolor=color.new(color.red, 87), text="OB- | H4 aligned", text_color=color.red)
+    box.new(left=bar_index-2, top=low[2], right=bar_index+1, bottom=high, extend=extend.right, border_color=color.orange, bgcolor=color.new(color.orange, 88), text="IMB-", text_color=color.orange)
+
+plotshape(bearishSweep, title="Buy-side liquidity sweep", style=shape.triangledown, location=location.abovebar, color=color.orange, size=size.tiny, text="BSL")
+plotshape(bullishSweep, title="Sell-side liquidity sweep", style=shape.triangleup, location=location.belowbar, color=color.aqua, size=size.tiny, text="SSL")
+plotshape(bullishMSS, title="Bullish MSS", style=shape.labelup, location=location.belowbar, color=color.lime, text="MSS+")
+plotshape(bearishMSS, title="Bearish MSS", style=shape.labeldown, location=location.abovebar, color=color.red, text="MSS-")
+
+// ── Dashboard ────────────────────────────────────────────────────────────────
+var table dash = table.new(position.top_right, 2, 5, border_width=1)
+if barstate.islast and showDashboard
+    table.cell(dash, 0, 0, "GENERAL JARVIS")
+    table.cell(dash, 1, 0, "EURUSD SMC")
+    table.cell(dash, 0, 1, "H4 bias")
+    table.cell(dash, 1, 1, h4Bias == 1 ? "BULLISH" : h4Bias == -1 ? "BEARISH" : "NEUTRAL")
+    table.cell(dash, 0, 2, "Chart TF")
+    table.cell(dash, 1, 2, timeframe.period)
+    table.cell(dash, 0, 3, "M15 POI")
+    table.cell(dash, 1, 3, bullishPOI ? "OB+ / IMB+" : bearishPOI ? "OB- / IMB-" : "WAIT")
+    table.cell(dash, 0, 4, "Webhook")
+    table.cell(dash, 1, 4, secretReady ? "SECRET SET" : "SECRET REQUIRED")
+
+// ── Authenticated closed-bar bridge. M15 POI details travel with its candle. ─
 if barstate.isconfirmed and sendBars and isEurUsd and validTf and secretReady
-    eventId = syminfo.tickerid + "-" + timeframe.period + "-" + str.tostring(time_close)
-    barUnix = int(time_close / 1000)
-    payload = "{"
+    string eventId = syminfo.tickerid + "-" + timeframe.period + "-" + str.tostring(time_close)
+    string direction = bullishPOI ? "bullish" : bearishPOI ? "bearish" : "none"
+    bool poiFound = bullishPOI or bearishPOI
+    float obTopPayload = bullishPOI ? bullObTop : bearishPOI ? bearObTop : na
+    float obBottomPayload = bullishPOI ? bullObBottom : bearishPOI ? bearObBottom : na
+    float imbTopPayload = bullishPOI ? low : bearishPOI ? low[2] : na
+    float imbBottomPayload = bullishPOI ? high[2] : bearishPOI ? high : na
+    string payload = "{"
     payload += "\"secret\":\"" + webhookSecret + "\","
     payload += "\"event_id\":\"" + eventId + "\","
     payload += "\"symbol\":\"EURUSD\","
     payload += "\"timeframe\":\"" + timeframe.period + "\","
     payload += "\"event_type\":\"closed_bar\","
-    payload += "\"bar_time\":" + str.tostring(barUnix) + ","
+    payload += "\"bar_time\":" + str.tostring(int(time_close / 1000)) + ","
     payload += "\"open\":" + str.tostring(open, format.mintick) + ","
     payload += "\"high\":" + str.tostring(high, format.mintick) + ","
     payload += "\"low\":" + str.tostring(low, format.mintick) + ","
     payload += "\"close\":" + str.tostring(close, format.mintick) + ","
-    payload += "\"imb_candidate\":" + (imbCandidate ? "true" : "false") + ","
-    payload += "\"imb_direction\":\"" + imbDirection + "\","
-    payload += "\"imb_low\":" + (imbCandidate ? str.tostring(imbLow, format.mintick) : "null") + ","
-    payload += "\"imb_high\":" + (imbCandidate ? str.tostring(imbHigh, format.mintick) : "null")
+    payload += "\"poi_candidate\":" + (poiFound ? "true" : "false") + ","
+    payload += "\"poi_direction\":\"" + direction + "\","
+    payload += "\"h4_bias\":\"" + (h4Bias == 1 ? "bullish" : h4Bias == -1 ? "bearish" : "neutral") + "\","
+    payload += "\"mss_confirmed\":" + ((bullishMSS or bearishMSS) ? "true" : "false") + ","
+    payload += "\"displacement_confirmed\":" + ((bullishDisplacement or bearishDisplacement) ? "true" : "false") + ","
+    payload += "\"ob_high\":" + (poiFound ? str.tostring(obTopPayload, format.mintick) : "null") + ","
+    payload += "\"ob_low\":" + (poiFound ? str.tostring(obBottomPayload, format.mintick) : "null") + ","
+    payload += "\"imb_high\":" + (poiFound ? str.tostring(imbTopPayload, format.mintick) : "null") + ","
+    payload += "\"imb_low\":" + (poiFound ? str.tostring(imbBottomPayload, format.mintick) : "null")
     payload += "}"
     alert(payload, alert.freq_once_per_bar_close)
-
