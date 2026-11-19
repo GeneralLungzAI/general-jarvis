@@ -19,6 +19,10 @@ The bridge uses `alert.freq_once_per_bar_close`; the dialog's frequency setting 
 
 On iPhone, use the chart's alert/bell control, choose **Create alert**, and select the indicator condition. If the webhook option is unavailable, finish setup in TradingView's web chart after enabling two-factor authentication.
 
+## Hosting reliability note
+
+The current Render service is on the Free compute plan. Render Free web services can spin down after 15 minutes without qualifying inbound traffic and may take about one minute to wake. TradingView cancels webhook requests if the endpoint takes more than three seconds to respond. The durable inbox protects against slow SMC processing after the app receives the request, but it cannot overcome a cold start before the request is accepted. For dependable live webhook delivery, use a paid always-on Render instance. Do not upgrade billing without the account owner's approval.
+
 ## Event and POI lifecycle
 
 - Every authenticated closed EURUSD bar is stored with a deterministic event ID; duplicate event IDs are idempotently ignored.
