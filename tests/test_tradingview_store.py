@@ -36,12 +36,14 @@ class TradingViewValidationTests(unittest.TestCase):
         event = dict(self.event, event_type="closed_bar", open=1.1, high=1.2, low=1.0, close=1.15)
         # Validation should pass; mock DB context to avoid a real connection.
         class Cursor:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
             def execute(self, *args): pass
             def fetchone(self): return {"id": 1}
         class Connection:
             def __enter__(self): return self
             def __exit__(self, *args): pass
-            def cursor(self): return self
+            def cursor(self): return Cursor()
         with patch("tradingview_store._connect") as connect:
             connect.return_value = Connection()
             result = save_event(event)
