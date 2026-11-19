@@ -95,23 +95,23 @@ def ask_openai(history):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["history"] = []
     await update.message.reply_text(
-        "GENERAL JARVIS ONLINE.\n"
-        "Telegram connection established.\n"
-        "Task memory is ready.\n"
+        "GENERAL JARVIS ONLINE.\\n"
+        "Telegram connection established.\\n"
+        "Task memory is ready.\\n"
         "Awaiting instructions, General."
     )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "GENERAL JARVIS COMMANDS\n\n"
-        "/start - Initialize Jarvis\n"
-        "/help - Show commands\n"
-        "/reset - Clear conversation memory\n"
-        "/addtask <task> - Save a task\n"
-        "/tasks - Show pending tasks\n"
-        "/done <id> - Mark a task complete\n"
-        "/completed - Show completed tasks\n"
+        "GENERAL JARVIS COMMANDS\\n\\n"
+        "/start - Initialize Jarvis\\n"
+        "/help - Show commands\\n"
+        "/reset - Clear conversation memory\\n"
+        "/addtask <task> - Save a task\\n"
+        "/tasks - Show pending tasks\\n"
+        "/done <id> - Mark a task complete\\n"
+        "/completed - Show completed tasks\\n"
         "/deltask <id> - Delete a task"
     )
 
@@ -134,7 +134,7 @@ async def addtask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         task_id = add_task(update.effective_user.id, title)
         await update.message.reply_text(
-            f"Task saved, General.\nID: {task_id}\n{title}"
+            f"Task saved, General.\\nID: {task_id}\\n{title}"
         )
     except ValueError as error:
         await update.message.reply_text(str(error))
@@ -148,7 +148,7 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines = ["PENDING TASKS"]
     lines.extend(f"#{task['id']} — {task['title']}" for task in tasks)
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text("\\n".join(lines))
 
 
 async def completed_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -159,7 +159,7 @@ async def completed_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines = ["COMPLETED TASKS"]
     lines.extend(f"#{task['id']} — {task['title']}" for task in tasks)
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text("\\n".join(lines))
 
 
 async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -219,7 +219,6 @@ async def respond(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def telegram_post_init(application: Application):
-    # This hook runs only after Telegram bot initialization succeeds.
     bot_info = await application.bot.get_me()
     print(
         f"[JARVIS] Telegram authenticated as @{bot_info.username} "
@@ -262,18 +261,13 @@ def run_bot():
         asyncio.set_event_loop(loop)
 
         polling_lock_connection = acquire_telegram_polling_lock()
-        heartbeat = start_telegram_lock_heartbeat(
-            polling_lock_connection
-        )
+        heartbeat = start_telegram_lock_heartbeat(polling_lock_connection)
 
         try:
             print("[JARVIS] Starting Telegram polling...", flush=True)
             application.run_polling(stop_signals=None)
         finally:
-            release_telegram_polling_lock(
-                polling_lock_connection,
-                *heartbeat
-            )
+            release_telegram_polling_lock(polling_lock_connection, *heartbeat)
 
     except Exception as error:
         print(
@@ -285,14 +279,32 @@ def run_bot():
         raise
 
 
-if __name__ == "__main__":
-    print("[JARVIS] Starting web health server.", flush=True)
-    threading.Thread(
+def start_telegram_worker():
+    worker = threading.Thread(
         target=run_bot,
         name="telegram-worker",
         daemon=True
-    ).start()
-    app.run(
-        host="0.0.0.0",
-        port=int(os.environ.get("PORT", 10000))
     )
+    worker.start()
+    return worker
+
+
+if __name__ == "__main__":
+    # Preserve Render's existing start command while replacing Flask's
+    # development server with Gunicorn.
+    port = os.environ.get("PORT", "10000")
+    os.execvp(
+        "gunicorn",
+        [
+            "gunicorn",
+            "--workers", "1",
+            "--threads", "4",
+            "--bind", f"0.0.0.0:{port}",
+            "--access-logfile", "-",
+            "bot:app",
+        ],
+    )
+else:
+    # Gunicorn imports this module as "bot"; start exactly one Telegram
+    # worker inside its single WSGI worker process.
+    start_telegram_worker()
