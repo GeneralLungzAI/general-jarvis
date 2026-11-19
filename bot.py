@@ -58,7 +58,6 @@ Your personality:
 """
 
 
-@app.route("/")
 def _ensure_telegram_worker_started():
     global telegram_worker_started
     if telegram_worker_started:
@@ -75,6 +74,7 @@ def start_background_services_after_http_accepts_request():
     _ensure_telegram_worker_started()
 
 
+@app.route("/")
 def home():
     status = "READY" if telegram_ready.is_set() else "STARTING"
     return f"GENERAL JARVIS IS ONLINE — TELEGRAM {status}", 200
