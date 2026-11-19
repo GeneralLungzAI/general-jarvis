@@ -111,7 +111,10 @@ def health():
     # Telegram readiness is reported separately so slow external APIs cannot block deploys.
     return {
         "status": "ok",
-        "telegram": "webhook" if telegram_ready.is_set() else "starting"
+        "telegram": "ready" if telegram_ready.is_set() else "starting",
+        "telegram_chat_configured": bool(os.environ.get("TELEGRAM_CHAT_ID")),
+        "tradingview_webhook_configured": bool(os.environ.get("TRADINGVIEW_WEBHOOK_SECRET")),
+        "tradingview_processor": "enabled"
     }, 200
 
 
