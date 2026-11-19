@@ -115,7 +115,7 @@ def process_closed_bar(event):
 
             direction = poi["direction"]
             incoming_h4 = event.get("h4_bias")
-            h4_reversed = incoming_h4 in ("bullish", "bearish") and incoming_h4 != poi["h4_bias"]
+            h4_reversed = incoming_h4 in ("bullish", "bearish", "neutral") and incoming_h4 != poi["h4_bias"]
             price_invalidated = (direction == "bullish" and c < poi["ob_low"]) or (
                 direction == "bearish" and c > poi["ob_high"]
             )
