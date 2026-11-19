@@ -186,6 +186,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def chatid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show the current chat ID so the owner can configure alert delivery in Render."""
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    if chat_id is None:
+        await update.message.reply_text("I couldn't determine this chat ID.")
+        return
+    await update.message.reply_text(
+        f"Telegram chat ID: {chat_id}\n"
+        "Use this value as TELEGRAM_CHAT_ID in the Render Environment settings "
+        "if trading alerts are not reaching this chat."
+    )
+
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print(f"[JARVIS] COMMAND_HANDLER help update_id={update.update_id}", flush=True)
     await update.message.reply_text(
@@ -193,7 +206,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/start - Initialize Jarvis\n"
         "/pois - Show active stored EURUSD POI candidates\n"
         "/help - Show commands\n"
-        "/reset - Clear conversation history only\n"
+        "/chatid - Show this chat's ID for alert routing\n"        "/reset - Clear conversation history only\n"
         "/remember <category> | <fact> - Save long-term memory\n"
         "/memories - List saved long-term memories\n"
         "/forget <id> - Delete one saved memory\n"
@@ -427,6 +440,7 @@ async def _initialize_telegram():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("pois", pois_command))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("chatid", chatid_command))
     application.add_handler(CommandHandler("reset", reset_command))
     application.add_handler(CommandHandler("remember", remember_command))
     application.add_handler(CommandHandler("memories", memories_command))
