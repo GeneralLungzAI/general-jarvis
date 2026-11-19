@@ -1,5 +1,5 @@
 //@version=6
-indicator("GENERAL JARVIS — Clean SMC Visual v3", shorttitle="JARVIS SMC v3", overlay=true, max_boxes_count=20, max_lines_count=30, max_labels_count=30)
+indicator("GENERAL JARVIS — Calibrated SMC v3.2", shorttitle="JARVIS SMC v3.2", overlay=true, max_boxes_count=20, max_lines_count=30, max_labels_count=30)
 
 // GENERAL LUNGZ RULESET
 // H4 bias is authoritative. M15 sequence: relevant liquidity sweep -> confirmed
@@ -12,8 +12,8 @@ string webhookSecret = input.string("", "Webhook secret (32+ characters)", group
 bool sendBars = input.bool(true, "Send confirmed EURUSD candles", group=G_CONN)
 
 string G_TIME = "2. Tokyo session"
-string tokyoSession = input.session("0000-0600", "Tokyo session window", group=G_TIME)
-string tokyoTimezone = input.string("Asia/Tokyo", "Session timezone", group=G_TIME)
+string tokyoSession = input.session("0000-0600", "Tokyo session (00:00–06:00 JST)", group=G_TIME)
+string tokyoTimezone = "Asia/Tokyo"
 
 string G_RULES = "3. Detection rules"
 int pivotLen = input.int(3, "Confirmed swing pivot length", minval=2, maxval=10, group=G_RULES)
@@ -107,8 +107,8 @@ bool sweepHighTokyo = isM15 and barstate.isconfirmed and tokyoComplete and not n
 bool sweepLowTokyo = isM15 and barstate.isconfirmed and tokyoComplete and not na(tokyoLow) and low < tokyoLow and close > tokyoLow
 bool sweepHighPD = isM15 and barstate.isconfirmed and high > pdh and close < pdh
 bool sweepLowPD = isM15 and barstate.isconfirmed and low < pdl and close > pdl
-bool bearSweep = sweepHighTokyo or sweepHighPD
-bool bullSweep = sweepLowTokyo or sweepLowPD
+bool bearSweep = h4Bias == -1 and (sweepHighTokyo or sweepHighPD)
+bool bullSweep = h4Bias == 1 and (sweepLowTokyo or sweepLowPD)
 var int bearSweepBar = na
 var int bullSweepBar = na
 var float bearSweepLevel = na
@@ -144,13 +144,20 @@ var bool bullPoiEvent = false
 var bool bearPoiEvent = false
 var bool bullBosEvent = false
 var bool bearBosEvent = false
+var bool bullMssEvent = false
+var bool bearMssEvent = false
+var int m15StructureDirection = 0
 bullPoiEvent := false
 bearPoiEvent := false
 bullBosEvent := false
 bearBosEvent := false
+bullMssEvent := false
+bearMssEvent := false
 
-bool bullBos = isM15 and barstate.isconfirmed and bullStage == 1 and not na(lastSwingHigh) and close > lastSwingHigh and close[1] <= lastSwingHigh
-bool bearBos = isM15 and barstate.isconfirmed and bearStage == 1 and not na(lastSwingLow) and close < lastSwingLow and close[1] >= lastSwingLow
+bool bullStructureBreak = isM15 and barstate.isconfirmed and h4Bias == 1 and not na(lastSwingHigh) and close > lastSwingHigh and close[1] <= lastSwingHigh
+bool bearStructureBreak = isM15 and barstate.isconfirmed and h4Bias == -1 and not na(lastSwingLow) and close < lastSwingLow and close[1] >= lastSwingLow
+bool bullBos = bullStructureBreak and bullStage == 1
+bool bearBos = bearStructureBreak and bearStage == 1
 
 float atr = ta.atr(atrLen)
 float candleRange = math.max(high - low, syminfo.mintick)
@@ -168,25 +175,47 @@ if isM15 and barstate.isconfirmed
         bearStage := 0
 
     if bullSweep
+        bearStage := 0
+        bearBosBar := na
+        bearDispBar := na
         bullStage := 1
+        bullBosBar := na
+        bullDispBar := na
     if bearSweep
+        bullStage := 0
+        bullBosBar := na
+        bullDispBar := na
         bearStage := 1
+        bearBosBar := na
+        bearDispBar := na
+
+    if bullStructureBreak
+        bullMssEvent := m15StructureDirection == -1
+        bullBosEvent := m15StructureDirection != -1
+        m15StructureDirection := 1
+    if bearStructureBreak
+        bearMssEvent := m15StructureDirection == 1
+        bearBosEvent := m15StructureDirection != 1
+        m15StructureDirection := -1
 
     if bullBos
         bullStage := 2
         bullBosBar := bar_index
-        bullBosEvent := true
     if bearBos
         bearStage := 2
         bearBosBar := bar_index
-        bearBosEvent := true
 
     // Only the last opposing candle in the impulse leg can become the OB.
     if bullStage == 2 and not na(bullBosBar) and bar_index > bullBosBar and bar_index - bullBosBar <= poiLife and bullDisplacement
         int off = na
         for i = 1 to obLookback
             if na(off) and i < bar_index - bullBosBar + 1 and close[i] < open[i]
-                off := i
+                bool untouched = true
+                for j = 0 to i - 1
+                    if low[j] <= high[i] and high[j] >= low[i]
+                        untouched := false
+                if untouched
+                    off := i
         if not na(off)
             bullObHigh := high[off]
             bullObLow := low[off]
@@ -198,7 +227,12 @@ if isM15 and barstate.isconfirmed
         int off = na
         for i = 1 to obLookback
             if na(off) and i < bar_index - bearBosBar + 1 and close[i] > open[i]
-                off := i
+                bool untouched = true
+                for j = 0 to i - 1
+                    if low[j] <= high[i] and high[j] >= low[i]
+                        untouched := false
+                if untouched
+                    off := i
         if not na(off)
             bearObHigh := high[off]
             bearObLow := low[off]
@@ -214,13 +248,19 @@ if isM15 and barstate.isconfirmed
         bearPoiEvent := true
         bearStage := 0
 
-// ── Draw BOS arrow from the exact confirmed pivot to the break candle ────────
-if showBosArrows and bullBosEvent and not na(lastSwingHighBar)
-    line.new(lastSwingHighBar, lastSwingHigh, bar_index, lastSwingHigh, xloc=xloc.bar_index, color=color.lime, width=2, style=line.style_arrow_right)
-    label.new(int(math.round((lastSwingHighBar + bar_index) / 2.0)), lastSwingHigh, "BOS", style=label.style_label_down, color=color.new(color.lime, 100), textcolor=color.lime, size=size.small)
-if showBosArrows and bearBosEvent and not na(lastSwingLowBar)
-    line.new(lastSwingLowBar, lastSwingLow, bar_index, lastSwingLow, xloc=xloc.bar_index, color=color.red, width=2, style=line.style_arrow_right)
-    label.new(int(math.round((lastSwingLowBar + bar_index) / 2.0)), lastSwingLow, "BOS", style=label.style_label_up, color=color.new(color.red, 100), textcolor=color.red, size=size.small)
+// ── One-pixel structure arrows with BOS/MSS label in a centred line gap ─────
+if showBosArrows and (bullBosEvent or bullMssEvent) and not na(lastSwingHighBar)
+    int midX = int(math.round((lastSwingHighBar + bar_index) / 2.0))
+    string tag = bullMssEvent ? "MSS" : "BOS"
+    line.new(lastSwingHighBar, lastSwingHigh, math.max(lastSwingHighBar, midX - 2), lastSwingHigh, xloc=xloc.bar_index, color=color.lime, width=1)
+    line.new(math.min(bar_index, midX + 2), lastSwingHigh, bar_index, lastSwingHigh, xloc=xloc.bar_index, color=color.lime, width=1, style=line.style_arrow_right)
+    label.new(midX, lastSwingHigh, tag, style=label.style_label_center, color=color.new(color.black, 100), textcolor=color.lime, size=size.tiny)
+if showBosArrows and (bearBosEvent or bearMssEvent) and not na(lastSwingLowBar)
+    int midX = int(math.round((lastSwingLowBar + bar_index) / 2.0))
+    string tag = bearMssEvent ? "MSS" : "BOS"
+    line.new(lastSwingLowBar, lastSwingLow, math.max(lastSwingLowBar, midX - 2), lastSwingLow, xloc=xloc.bar_index, color=color.red, width=1)
+    line.new(math.min(bar_index, midX + 2), lastSwingLow, bar_index, lastSwingLow, xloc=xloc.bar_index, color=color.red, width=1, style=line.style_arrow_right)
+    label.new(midX, lastSwingLow, tag, style=label.style_label_center, color=color.new(color.black, 100), textcolor=color.red, size=size.tiny)
 
 // ── One active POI: neutral grey OB box + FVG box + IMP pointer ──────────────
 var box activeObBox = na
