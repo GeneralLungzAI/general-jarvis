@@ -183,7 +183,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "GENERAL JARVIS COMMANDS\n\n"
         "/start - Initialize Jarvis\n"
-        "/pois - Show active stored EURUSD POI candidates\\n"
+        "/pois - Show active stored EURUSD POI candidates\n"
         "/help - Show commands\n"
         "/reset - Clear conversation history only\n"
         "/remember <category> | <fact> - Save long-term memory\n"
