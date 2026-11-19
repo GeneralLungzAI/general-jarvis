@@ -77,6 +77,23 @@ def _latest_events(candles, timeframe, prior_trend, start_index=0):
     )
 
 
+def _queue_notification(cursor, event, poi_id, notification_type, notice):
+    suffix = str(event["bar_time"]) if notification_type == "poi_invalidated" else notification_type
+    key = f"{notification_type}:{poi_id}:{suffix}"
+    payload = {
+        "type": notification_type,
+        "poi_id": poi_id,
+        "notice": notice,
+        "event": {"bar_time": event["bar_time"]},
+    }
+    cursor.execute("""
+        INSERT INTO tradingview_notifications
+            (notification_key, event_id, poi_id, notification_type, payload)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (notification_key) DO NOTHING
+    """, (key, event["event_id"], poi_id, notification_type, Json(payload)))
+
+
 def process_closed_bar(event):
     """Persist LTF bars, advance POI lifecycle and return new notification(s)."""
     tf = event.get("timeframe")
@@ -127,10 +144,12 @@ def process_closed_bar(event):
                         invalidation_reason=%s, updated_at=NOW()
                     WHERE id=%s AND status IN ('active','mitigated')
                 """, (event["bar_time"], reason, poi["id"]))
-                notices.append({
+                notice = {
                     "type": "invalidated", "poi_id": poi["id"],
                     "direction": direction, "close": c, "reason": reason
-                })
+                }
+                notices.append(notice)
+                _queue_notification(cur, event, poi["id"], "poi_invalidated", notice)
                 return notices
 
             overlaps_ob = l <= poi["ob_high"] and h >= poi["ob_low"]
@@ -143,11 +162,13 @@ def process_closed_bar(event):
                 """, (event["bar_time"], poi["id"]))
                 poi["status"] = "mitigated"
                 poi["mitigated_at"] = event["bar_time"]
-                notices.append({
+                notice = {
                     "type": "mitigated", "poi_id": poi["id"],
                     "direction": direction, "h4_bias": poi["h4_bias"],
                     "bar_time": event["bar_time"]
-                })
+                }
+                notices.append(notice)
+                _queue_notification(cur, event, poi["id"], "poi_mitigated", notice)
 
             if poi["status"] != "mitigated" or not poi["mitigated_at"]:
                 return notices
@@ -243,5 +264,7 @@ def process_closed_bar(event):
                 RETURNING id
             """, (m1.candle_timestamp, Json(confirmation), poi["id"]))
             if cur.fetchone():
-                notices.append({"type": "confirmation", **confirmation})
+                notice = {"type": "confirmation", **confirmation}
+                notices.append(notice)
+                _queue_notification(cur, event, poi["id"], "ltf_confirmation", notice)
     return notices
