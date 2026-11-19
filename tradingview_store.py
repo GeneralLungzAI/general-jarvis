@@ -137,6 +137,12 @@ def save_event(event):
                     raise ValueError("POI price boundaries must be finite.")
                 if ob_high <= ob_low or imb_high <= imb_low:
                     raise ValueError("POI zone boundaries are inverted or empty.")
+                # A new qualified EURUSD M15 structure supersedes the prior active zone.
+                cursor.execute("""
+                    UPDATE poi_candidates
+                    SET status = 'expired', updated_at = NOW()
+                    WHERE symbol = %s AND timeframe = '15' AND status = 'active'
+                """, (str(event["symbol"]).upper(),))
                 cursor.execute("""
                     INSERT INTO poi_candidates
                         (event_id, symbol, timeframe, direction, h4_bias, bar_time,
