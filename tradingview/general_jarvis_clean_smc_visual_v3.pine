@@ -154,10 +154,11 @@ bearBosEvent := false
 bullMssEvent := false
 bearMssEvent := false
 
-bool bullStructureBreak = isM15 and barstate.isconfirmed and h4Bias == 1 and not na(lastSwingHigh) and close > lastSwingHigh and close[1] <= lastSwingHigh
-bool bearStructureBreak = isM15 and barstate.isconfirmed and h4Bias == -1 and not na(lastSwingLow) and close < lastSwingLow and close[1] >= lastSwingLow
-bool bullBos = bullStructureBreak and bullStage == 1
-bool bearBos = bearStructureBreak and bearStage == 1
+bool bullStructureBreak = isM15 and barstate.isconfirmed and not na(lastSwingHigh) and close > lastSwingHigh and close[1] <= lastSwingHigh
+bool bearStructureBreak = isM15 and barstate.isconfirmed and not na(lastSwingLow) and close < lastSwingLow and close[1] >= lastSwingLow
+// M15 may display countertrend structure, but only H4-aligned breaks advance a POI setup.
+bool bullBos = bullStructureBreak and h4Bias == 1 and bullStage == 1
+bool bearBos = bearStructureBreak and h4Bias == -1 and bearStage == 1
 
 float atr = ta.atr(atrLen)
 float candleRange = math.max(high - low, syminfo.mintick)
