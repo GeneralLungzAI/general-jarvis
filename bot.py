@@ -16,6 +16,13 @@ from telegram.ext import (
     filters,
 )
 
+from memory_store import (
+    initialize as initialize_conversation_store,
+    save_message,
+    get_recent_history,
+    clear_conversation,
+)
+
 from task_store import (
     initialize as initialize_task_store,
     add_task,
@@ -93,7 +100,6 @@ def ask_openai(history):
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["history"] = []
     await update.message.reply_text(
         "GENERAL JARVIS ONLINE.\n"
         "Telegram connection established.\n"
@@ -118,10 +124,18 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["history"] = []
-    await update.message.reply_text(
-        "Conversation memory cleared, General. Saved tasks remain intact."
-    )
+    try:
+        deleted = clear_conversation(update.effective_user.id)
+        print(f"[JARVIS] CONVERSATION_RESET deleted={deleted}", flush=True)
+        await update.message.reply_text(
+            "Conversation memory cleared, General. Saved tasks remain intact."
+        )
+    except Exception as error:
+        print(f"[JARVIS] CONVERSATION_RESET_ERROR {type(error).__name__}", flush=True)
+        await update.message.reply_text(
+            "I couldn't clear conversation memory because the database is unavailable, General. "
+            "Your saved tasks were not changed."
+        )
 
 
 async def addtask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -199,25 +213,27 @@ async def respond(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.chat.send_action("typing")
-    history = context.user_data.setdefault("history", [])
-    history.append({"role": "user", "content": message})
 
     try:
-        answer = await asyncio.to_thread(ask_openai, history[-12:])
-        history.append({"role": "assistant", "content": answer})
-        context.user_data["history"] = history[-12:]
+        user_id = update.effective_user.id
+        await asyncio.to_thread(save_message, user_id, "user", message)
+        history = await asyncio.to_thread(get_recent_history, user_id, 12)
+        answer = await asyncio.to_thread(ask_openai, history)
+        await asyncio.to_thread(save_message, user_id, "assistant", answer)
+        print("[JARVIS] CONVERSATION_TURN_SAVED", flush=True)
         await update.message.reply_text(answer)
 
     except urllib.error.HTTPError:
         await update.message.reply_text(
             "My intelligence service returned an error, General. "
-            "Please check system diagnostics."
+            "Your message was saved where possible; please try again shortly."
         )
 
     except Exception as error:
-        print("GENERAL JARVIS ERROR:", repr(error), flush=True)
+        print(f"[JARVIS] GENERAL_ERROR {type(error).__name__}", flush=True)
         await update.message.reply_text(
-            "An internal connection error occurred, General."
+            "An internal connection or memory error occurred, General. "
+            "Please try again shortly."
         )
 
 
@@ -240,7 +256,8 @@ def run_bot():
 
         print("[JARVIS] Initializing Neon task database...", flush=True)
         initialize_task_store()
-        print("[JARVIS] Neon task database initialized successfully.", flush=True)
+        initialize_conversation_store()
+        print("[JARVIS] Neon task and conversation stores initialized successfully.", flush=True)
 
         application = (
             Application.builder()
