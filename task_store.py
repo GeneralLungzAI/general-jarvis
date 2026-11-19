@@ -112,8 +112,7 @@ def _polling_lock_connection():
         keepalives=1,
         keepalives_idle=30,
         keepalives_interval=10,
-        keepalives_count=3,
-        options="-c statement_timeout=10000"
+        keepalives_count=3
     )
 
 
@@ -128,6 +127,9 @@ def acquire_telegram_polling_lock(retry_seconds=5):
             # Keep autocommit disabled: the transaction-scoped lock remains
             # held on this dedicated connection until rollback/close.
             with connection.cursor() as cursor:
+                # Neon transaction poolers reject statement_timeout in startup
+                # options. Set it transaction-locally after connecting instead.
+                cursor.execute("SET LOCAL statement_timeout = 10000")
                 cursor.execute(
                     "SELECT pg_try_advisory_xact_lock(%s)",
                     (TELEGRAM_POLLING_LOCK_KEY,)
