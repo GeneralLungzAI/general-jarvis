@@ -73,6 +73,18 @@ def initialize():
                 CREATE INDEX IF NOT EXISTS idx_poi_candidates_status_created
                 ON poi_candidates(status, created_at DESC)
             """)
+            cursor.execute("""
+                ALTER TABLE tradingview_events
+                ADD COLUMN IF NOT EXISTS processing_status TEXT NOT NULL DEFAULT 'pending',
+                ADD COLUMN IF NOT EXISTS processing_attempts INTEGER NOT NULL DEFAULT 0,
+                ADD COLUMN IF NOT EXISTS processing_started_at TIMESTAMPTZ,
+                ADD COLUMN IF NOT EXISTS processed_at TIMESTAMPTZ,
+                ADD COLUMN IF NOT EXISTS processing_error TEXT
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_tradingview_events_pending
+                ON tradingview_events(processing_status, id)
+            """)
 
 
 def save_event(event):
@@ -197,3 +209,73 @@ def database_status():
         "database": row["database_name"],
         "user": row["database_user"],
     }
+
+def claim_pending_events(limit=10):
+    """Atomically claim durable webhook events; reclaim abandoned claims after 2 minutes."""
+    limit = max(1, min(int(limit), 50))
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                WITH candidates AS (
+                    SELECT id
+                    FROM tradingview_events
+                    WHERE event_type = 'closed_bar'
+                      AND (
+                        processing_status = 'pending'
+                        OR (
+                            processing_status = 'processing'
+                            AND processing_started_at < NOW() - INTERVAL '2 minutes'
+                        )
+                      )
+                    ORDER BY id
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT %s
+                )
+                UPDATE tradingview_events AS event
+                SET processing_status = 'processing',
+                    processing_attempts = processing_attempts + 1,
+                    processing_started_at = NOW(),
+                    processing_error = NULL
+                FROM candidates
+                WHERE event.id = candidates.id
+                RETURNING event.id, event.event_id, event.payload,
+                          event.processing_attempts
+            """, (limit,))
+            return [dict(row) for row in cursor.fetchall()]
+
+
+def mark_event_processed(event_id):
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                UPDATE tradingview_events
+                SET processing_status='processed', processed_at=NOW(),
+                    processing_started_at=NULL, processing_error=NULL
+                WHERE event_id=%s
+            """, (event_id,))
+
+
+def mark_event_failed(event_id, error, max_attempts=5):
+    safe_error = str(error)[:1000]
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                UPDATE tradingview_events
+                SET processing_status = CASE
+                        WHEN processing_attempts >= %s THEN 'failed'
+                        ELSE 'pending'
+                    END,
+                    processing_started_at=NULL,
+                    processing_error=%s
+                WHERE event_id=%s
+            """, (max_attempts, safe_error, event_id))
+
+
+def get_poi_id_for_event(event_id):
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT id FROM poi_candidates WHERE event_id=%s
+            """, (event_id,))
+            row = cursor.fetchone()
+            return row["id"] if row else None
