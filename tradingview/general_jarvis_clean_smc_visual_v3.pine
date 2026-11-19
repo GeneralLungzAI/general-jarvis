@@ -103,10 +103,10 @@ if not na(pivotLow)
     lastSwingLowBar := bar_index - pivotLen
 
 // ── Minimum relevant liquidity: completed Tokyo extremes + previous day ──────
-bool sweepHighTokyo = isM15 and barstate.isconfirmed and tokyoComplete and not na(tokyoHigh) and high > tokyoHigh and close < tokyoHigh
-bool sweepLowTokyo = isM15 and barstate.isconfirmed and tokyoComplete and not na(tokyoLow) and low < tokyoLow and close > tokyoLow
-bool sweepHighPD = isM15 and barstate.isconfirmed and high > pdh and close < pdh
-bool sweepLowPD = isM15 and barstate.isconfirmed and low < pdl and close > pdl
+bool sweepHighTokyo = isM15 and barstate.isconfirmed and tokyoComplete and not na(tokyoHigh) and high > tokyoHigh and close < tokyoHigh and close[1] <= tokyoHigh
+bool sweepLowTokyo = isM15 and barstate.isconfirmed and tokyoComplete and not na(tokyoLow) and low < tokyoLow and close > tokyoLow and close[1] >= tokyoLow
+bool sweepHighPD = isM15 and barstate.isconfirmed and not na(pdh) and high > pdh and close < pdh and close[1] <= pdh
+bool sweepLowPD = isM15 and barstate.isconfirmed and not na(pdl) and low < pdl and close > pdl and close[1] >= pdl
 bool bearSweep = h4Bias == -1 and (sweepHighTokyo or sweepHighPD)
 bool bullSweep = h4Bias == 1 and (sweepLowTokyo or sweepLowPD)
 var int bearSweepBar = na
@@ -335,7 +335,7 @@ if barstate.isconfirmed and sendBars and isEurUsd and validTf and secretReady
     payload += "\"poi_candidate\":" + (poiFound ? "true" : "false") + ","
     payload += "\"poi_direction\":\"" + direction + "\","
     payload += "\"h4_bias\":\"" + (h4Bias == 1 ? "bullish" : h4Bias == -1 ? "bearish" : "neutral") + "\","
-    payload += "\"mss_confirmed\":" + ((bullBosEvent or bearBosEvent) ? "true" : "false") + ","
+    payload += "\"mss_confirmed\":" + ((bullMssEvent or bearMssEvent) ? "true" : "false") + ","
     payload += "\"displacement_confirmed\":" + ((bullDisplacement or bearDisplacement) ? "true" : "false") + ","
     payload += "\"ob_high\":" + (poiFound ? str.tostring(payloadObHigh, format.mintick) : "null") + ","
     payload += "\"ob_low\":" + (poiFound ? str.tostring(payloadObLow, format.mintick) : "null") + ","
