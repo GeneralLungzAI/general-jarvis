@@ -348,5 +348,7 @@ alertcondition(bearSweep, "JARVIS: Confirmed high-side liquidity sweep", "Confir
 alertcondition(bullSweep, "JARVIS: Confirmed low-side liquidity sweep", "Confirmed liquidity sweep below Tokyo low / previous-day low on {{ticker}} {{interval}}")
 alertcondition(bullBosEvent, "JARVIS: Bullish BOS", "Confirmed bullish BOS on {{ticker}} {{interval}}")
 alertcondition(bearBosEvent, "JARVIS: Bearish BOS", "Confirmed bearish BOS on {{ticker}} {{interval}}")
+alertcondition(bullMssEvent, "JARVIS: Bullish MSS", "Confirmed bullish MSS on {{ticker}} {{interval}}")
+alertcondition(bearMssEvent, "JARVIS: Bearish MSS", "Confirmed bearish MSS on {{ticker}} {{interval}}")
 alertcondition(bullPoiEvent, "JARVIS: Bullish POI", "Qualified bullish OB + FVG on {{ticker}} {{interval}}")
 alertcondition(bearPoiEvent, "JARVIS: Bearish POI", "Qualified bearish OB + FVG on {{ticker}} {{interval}}")
