@@ -153,3 +153,23 @@ def save_event(event):
                 poi_id = poi_row["id"] if poi_row else None
             return {"stored": event_stored, "duplicate": not event_stored,
                     "id": row["id"] if row else None, "poi_id": poi_id}
+
+
+def list_poi_candidates(status="active", limit=20):
+    """Read recent qualified M15 POI zones without exposing raw credentials."""
+    allowed = ("active", "mitigated", "invalidated", "expired")
+    if status not in allowed:
+        raise ValueError("Unsupported POI status.")
+    limit = max(1, min(int(limit), 100))
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT id, event_id, symbol, timeframe, direction, h4_bias,
+                       bar_time, ob_high, ob_low, imb_high, imb_low,
+                       status, created_at, updated_at
+                FROM poi_candidates
+                WHERE status = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+            """, (status, limit))
+            return [dict(row) for row in cursor.fetchall()]
