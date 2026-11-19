@@ -1,0 +1,308 @@
+//@version=6
+indicator("GENERAL JARVIS — Clean SMC Visual v3", shorttitle="JARVIS SMC v3", overlay=true, max_boxes_count=20, max_lines_count=30, max_labels_count=30)
+
+// GENERAL LUNGlZ RULESET
+// H4 bias is authoritative. M15 sequence: relevant liquidity sweep -> confirmed
+// close through confirmed swing -> displacement -> originating OB + FVG.
+// This is visual decision support only. It never places trades.
+
+// ── Inputs ───────────────────────────────────────────────────────────────────
+string G_CONN = "1. JARVIS connection"
+string webhookSecret = input.string("", "Webhook secret (32+ characters)", group=G_CONN)
+bool sendBars = input.bool(true, "Send confirmed EURUSD candles", group=G_CONN)
+
+string G_TIME = "2. Tokyo session"
+string tokyoSession = input.session("0000-0600", "Tokyo session window", group=G_TIME)
+string tokyoTimezone = input.string("Asia/Tokyo", "Session timezone", group=G_TIME)
+
+string G_RULES = "3. Detection rules"
+int pivotLen = input.int(3, "Confirmed swing pivot length", minval=2, maxval=10, group=G_RULES)
+int sweepLife = input.int(12, "M15 bars allowed from sweep to BOS", minval=1, maxval=50, group=G_RULES)
+int obLookback = input.int(10, "Originating OB search bars", minval=2, maxval=30, group=G_RULES)
+int atrLen = input.int(14, "ATR length", minval=2, maxval=100, group=G_RULES)
+float displacementATR = input.float(1.2, "Displacement body >= ATR x", minval=0.2, maxval=5, step=0.1, group=G_RULES)
+float minBodyRatio = input.float(0.60, "Minimum body / candle range", minval=0.3, maxval=0.95, step=0.05, group=G_RULES)
+int poiLife = input.int(3, "M15 bars allowed for FVG after displacement", minval=1, maxval=8, group=G_RULES)
+
+string G_VIEW = "4. Minimal chart display"
+bool showTokyoBox = input.bool(true, "Tokyo shaded range box", group=G_VIEW)
+bool showSweepMarks = input.bool(true, "Mark confirmed liquidity sweeps", group=G_VIEW)
+bool showBosArrows = input.bool(true, "BOS arrow from swing to break candle", group=G_VIEW)
+bool showPoi = input.bool(true, "Show one active OB and FVG", group=G_VIEW)
+
+// ── Guards ──────────────────────────────────────────────────────────────────
+string sym = str.upper(syminfo.tickerid)
+bool isEurUsd = str.contains(sym, "EURUSD")
+bool isM15 = timeframe.period == "15"
+bool validTf = timeframe.period == "1" or timeframe.period == "3" or timeframe.period == "5" or timeframe.period == "15" or timeframe.period == "60" or timeframe.period == "240"
+bool secretReady = str.length(webhookSecret) >= 32
+
+// ── Confirmed H4 bias: direction changes only after a closed H4 swing break ──
+f_structureBias() =>
+    float ph = ta.pivothigh(high, pivotLen, pivotLen)
+    float pl = ta.pivotlow(low, pivotLen, pivotLen)
+    var float sh = na
+    var float sl = na
+    var int dir = 0
+    if not na(ph)
+        sh := ph
+    if not na(pl)
+        sl := pl
+    if not na(sh) and close > sh
+        dir := 1
+    else if not na(sl) and close < sl
+        dir := -1
+    dir
+int h4Bias = request.security(syminfo.tickerid, "240", f_structureBias()[1], barmerge.gaps_off, barmerge.lookahead_on)
+
+// ── Tokyo session: one shaded rectangle, no Tokyo high/low plot lines ────────
+bool inTokyo = not na(time(timeframe.period, tokyoSession, tokyoTimezone))
+bool tokyoStart = inTokyo and not inTokyo[1]
+bool tokyoEnd = not inTokyo and inTokyo[1]
+var float tokyoHigh = na
+var float tokyoLow = na
+var int tokyoLeft = na
+var box tokyoBox = na
+var bool tokyoComplete = false
+if tokyoStart
+    tokyoHigh := high
+    tokyoLow := low
+    tokyoLeft := bar_index
+    tokyoComplete := false
+    if not na(tokyoBox)
+        box.delete(tokyoBox)
+    if showTokyoBox
+        tokyoBox := box.new(left=bar_index, top=high, right=bar_index, bottom=low, bgcolor=color.new(color.blue, 88), border_color=color.new(color.blue, 45), text="TOKYO", text_color=color.new(color.white, 20))
+else if inTokyo
+    tokyoHigh := math.max(nz(tokyoHigh, high), high)
+    tokyoLow := math.min(nz(tokyoLow, low), low)
+    if showTokyoBox and not na(tokyoBox)
+        box.set_top(tokyoBox, tokyoHigh)
+        box.set_bottom(tokyoBox, tokyoLow)
+        box.set_right(tokyoBox, bar_index)
+if tokyoEnd
+    tokyoComplete := true
+
+// Previous completed day levels are references for sweep detection only.
+// They are deliberately not drawn as persistent chart lines.
+float pdh = request.security(syminfo.tickerid, "D", high[1], barmerge.gaps_off, barmerge.lookahead_on)
+float pdl = request.security(syminfo.tickerid, "D", low[1], barmerge.gaps_off, barmerge.lookahead_on)
+
+// ── Confirmed local swing anchors ────────────────────────────────────────────
+float pivotHigh = ta.pivothigh(high, pivotLen, pivotLen)
+float pivotLow = ta.pivotlow(low, pivotLen, pivotLen)
+var float lastSwingHigh = na
+var float lastSwingLow = na
+var int lastSwingHighBar = na
+var int lastSwingLowBar = na
+if not na(pivotHigh)
+    lastSwingHigh := pivotHigh
+    lastSwingHighBar := bar_index - pivotLen
+if not na(pivotLow)
+    lastSwingLow := pivotLow
+    lastSwingLowBar := bar_index - pivotLen
+
+// ── Minimum relevant liquidity: completed Tokyo extremes + previous day ──────
+bool sweepHighTokyo = isM15 and barstate.isconfirmed and tokyoComplete and not na(tokyoHigh) and high > tokyoHigh and close < tokyoHigh
+bool sweepLowTokyo = isM15 and barstate.isconfirmed and tokyoComplete and not na(tokyoLow) and low < tokyoLow and close > tokyoLow
+bool sweepHighPD = isM15 and barstate.isconfirmed and high > pdh and close < pdh
+bool sweepLowPD = isM15 and barstate.isconfirmed and low < pdl and close > pdl
+bool bearSweep = sweepHighTokyo or sweepHighPD
+bool bullSweep = sweepLowTokyo or sweepLowPD
+var int bearSweepBar = na
+var int bullSweepBar = na
+var float bearSweepLevel = na
+var float bullSweepLevel = na
+if bearSweep
+    bearSweepBar := bar_index
+    bearSweepLevel := sweepHighTokyo ? tokyoHigh : pdh
+    bullSweepBar := na
+if bullSweep
+    bullSweepBar := bar_index
+    bullSweepLevel := sweepLowTokyo ? tokyoLow : pdl
+    bearSweepBar := na
+
+if showSweepMarks and bearSweep
+    label.new(bar_index, high, "LIQ SWEEP", style=label.style_label_down, color=color.new(color.orange, 8), textcolor=color.white, size=size.tiny)
+if showSweepMarks and bullSweep
+    label.new(bar_index, low, "LIQ SWEEP", style=label.style_label_up, color=color.new(color.aqua, 8), textcolor=color.black, size=size.tiny)
+
+// ── Sequential M15 setup state ───────────────────────────────────────────────
+var int bullStage = 0
+var int bearStage = 0
+var int bullBosBar = na
+var int bearBosBar = na
+var int bullDispBar = na
+var int bearDispBar = na
+var float bullObHigh = na
+var float bullObLow = na
+var float bearObHigh = na
+var float bearObLow = na
+var int bullObBar = na
+var int bearObBar = na
+var bool bullPoiEvent = false
+var bool bearPoiEvent = false
+var bool bullBosEvent = false
+var bool bearBosEvent = false
+bullPoiEvent := false
+bearPoiEvent := false
+bullBosEvent := false
+bearBosEvent := false
+
+bool bullBos = isM15 and barstate.isconfirmed and bullStage == 1 and not na(lastSwingHigh) and close > lastSwingHigh and close[1] <= lastSwingHigh
+bool bearBos = isM15 and barstate.isconfirmed and bearStage == 1 and not na(lastSwingLow) and close < lastSwingLow and close[1] >= lastSwingLow
+
+float atr = ta.atr(atrLen)
+float candleRange = math.max(high - low, syminfo.mintick)
+float candleBody = math.abs(close - open)
+bool displacement = candleBody >= atr * displacementATR and candleBody / candleRange >= minBodyRatio
+bool bullDisplacement = displacement and close > open
+bool bearDisplacement = displacement and close < open
+bool bullFvg = bar_index >= 2 and low > high[2]
+bool bearFvg = bar_index >= 2 and high < low[2]
+
+if isM15 and barstate.isconfirmed
+    if bullStage > 0 and (h4Bias != 1 or na(bullSweepBar) or bar_index - bullSweepBar > sweepLife + poiLife + 2)
+        bullStage := 0
+    if bearStage > 0 and (h4Bias != -1 or na(bearSweepBar) or bar_index - bearSweepBar > sweepLife + poiLife + 2)
+        bearStage := 0
+
+    if bullSweep
+        bullStage := 1
+    if bearSweep
+        bearStage := 1
+
+    if bullBos
+        bullStage := 2
+        bullBosBar := bar_index
+        bullBosEvent := true
+    if bearBos
+        bearStage := 2
+        bearBosBar := bar_index
+        bearBosEvent := true
+
+    // Only the last opposing candle in the impulse leg can become the OB.
+    if bullStage == 2 and not na(bullBosBar) and bar_index > bullBosBar and bar_index - bullBosBar <= poiLife and bullDisplacement
+        int off = na
+        for i = 1 to obLookback
+            if na(off) and i < bar_index - bullBosBar + 1 and close[i] < open[i]
+                off := i
+        if not na(off)
+            bullObHigh := high[off]
+            bullObLow := low[off]
+            bullObBar := bar_index - off
+            bullDispBar := bar_index
+            bullStage := 3
+
+    if bearStage == 2 and not na(bearBosBar) and bar_index > bearBosBar and bar_index - bearBosBar <= poiLife and bearDisplacement
+        int off = na
+        for i = 1 to obLookback
+            if na(off) and i < bar_index - bearBosBar + 1 and close[i] > open[i]
+                off := i
+        if not na(off)
+            bearObHigh := high[off]
+            bearObLow := low[off]
+            bearObBar := bar_index - off
+            bearDispBar := bar_index
+            bearStage := 3
+
+    // FVG must be created by the displacement candle or immediately after it.
+    if bullStage == 3 and not na(bullDispBar) and bar_index >= bullDispBar and bar_index - bullDispBar <= poiLife and bullFvg and h4Bias == 1
+        bullPoiEvent := true
+        bullStage := 0
+    if bearStage == 3 and not na(bearDispBar) and bar_index >= bearDispBar and bar_index - bearDispBar <= poiLife and bearFvg and h4Bias == -1
+        bearPoiEvent := true
+        bearStage := 0
+
+// ── Draw BOS arrow from the exact confirmed pivot to the break candle ────────
+if showBosArrows and bullBosEvent and not na(lastSwingHighBar)
+    line.new(lastSwingHighBar, lastSwingHigh, bar_index, lastSwingHigh, xloc=xloc.bar_index, color=color.lime, width=2, style=line.style_arrow_right)
+    label.new(int(math.round((lastSwingHighBar + bar_index) / 2.0)), lastSwingHigh, "BOS", style=label.style_label_down, color=color.new(color.lime, 100), textcolor=color.lime, size=size.small)
+if showBosArrows and bearBosEvent and not na(lastSwingLowBar)
+    line.new(lastSwingLowBar, lastSwingLow, bar_index, lastSwingLow, xloc=xloc.bar_index, color=color.red, width=2, style=line.style_arrow_right)
+    label.new(int(math.round((lastSwingLowBar + bar_index) / 2.0)), lastSwingLow, "BOS", style=label.style_label_up, color=color.new(color.red, 100), textcolor=color.red, size=size.small)
+
+// ── One active POI: neutral grey OB box + FVG box + IMP pointer ──────────────
+var box activeObBox = na
+var box activeFvgBox = na
+var line activeImpArrow = na
+var label activeImpLabel = na
+if bullPoiEvent or bearPoiEvent
+    if not na(activeObBox)
+        box.delete(activeObBox)
+    if not na(activeFvgBox)
+        box.delete(activeFvgBox)
+    if not na(activeImpArrow)
+        line.delete(activeImpArrow)
+    if not na(activeImpLabel)
+        label.delete(activeImpLabel)
+
+    float obTop = bullPoiEvent ? bullObHigh : bearObHigh
+    float obBottom = bullPoiEvent ? bullObLow : bearObLow
+    int obLeft = bullPoiEvent ? bullObBar : bearObBar
+    float fvgTop = bullPoiEvent ? low : low[2]
+    float fvgBottom = bullPoiEvent ? high[2] : high
+    float fvgMid = (fvgTop + fvgBottom) / 2.0
+    color dirColor = bullPoiEvent ? color.lime : color.red
+
+    if showPoi
+        activeObBox := box.new(left=obLeft, top=obTop, right=bar_index + 1, bottom=obBottom, extend=extend.right, border_color=color.gray, bgcolor=color.new(color.gray, 78), text="OB", text_color=color.white)
+        activeFvgBox := box.new(left=bar_index - 2, top=fvgTop, right=bar_index + 1, bottom=fvgBottom, extend=extend.right, border_color=color.new(dirColor, 15), bgcolor=color.new(dirColor, 88), text="FVG", text_color=dirColor)
+        activeImpArrow := line.new(bar_index, fvgMid, bar_index + 4, fvgMid, xloc=xloc.bar_index, color=dirColor, width=2, style=line.style_arrow_right)
+        activeImpLabel := label.new(bar_index + 2, fvgMid, "IMP", style=label.style_label_center, color=color.new(color.black, 100), textcolor=dirColor, size=size.small)
+
+// Remove POI drawings once price first mitigates the active OB or FVG.
+bool activeObTouched = not na(activeObBox) and high >= box.get_bottom(activeObBox) and low <= box.get_top(activeObBox)
+bool activeFvgTouched = not na(activeFvgBox) and high >= box.get_bottom(activeFvgBox) and low <= box.get_top(activeFvgBox)
+if barstate.isconfirmed and (activeObTouched or activeFvgTouched)
+    if not na(activeObBox)
+        box.delete(activeObBox)
+        activeObBox := na
+    if not na(activeFvgBox)
+        box.delete(activeFvgBox)
+        activeFvgBox := na
+    if not na(activeImpArrow)
+        line.delete(activeImpArrow)
+        activeImpArrow := na
+    if not na(activeImpLabel)
+        label.delete(activeImpLabel)
+        activeImpLabel := na
+
+// ── JARVIS webhook bridge: preserve the existing event contract ──────────────
+if barstate.isconfirmed and sendBars and isEurUsd and validTf and secretReady
+    string eventId = syminfo.tickerid + "-" + timeframe.period + "-" + str.tostring(time_close)
+    bool poiFound = bullPoiEvent or bearPoiEvent
+    string direction = bullPoiEvent ? "bullish" : bearPoiEvent ? "bearish" : "none"
+    float payloadObHigh = bullPoiEvent ? bullObHigh : bearPoiEvent ? bearObHigh : na
+    float payloadObLow = bullPoiEvent ? bullObLow : bearPoiEvent ? bearObLow : na
+    float payloadImbHigh = bullPoiEvent ? low : bearPoiEvent ? low[2] : na
+    float payloadImbLow = bullPoiEvent ? high[2] : bearPoiEvent ? high : na
+    string payload = "{"
+    payload += "\"secret\":\"" + webhookSecret + "\","
+    payload += "\"event_id\":\"" + eventId + "\","
+    payload += "\"symbol\":\"EURUSD\","
+    payload += "\"timeframe\":\"" + timeframe.period + "\","
+    payload += "\"event_type\":\"closed_bar\","
+    payload += "\"bar_time\":" + str.tostring(int(time_close / 1000)) + ","
+    payload += "\"open\":" + str.tostring(open, format.mintick) + ","
+    payload += "\"high\":" + str.tostring(high, format.mintick) + ","
+    payload += "\"low\":" + str.tostring(low, format.mintick) + ","
+    payload += "\"close\":" + str.tostring(close, format.mintick) + ","
+    payload += "\"poi_candidate\":" + (poiFound ? "true" : "false") + ","
+    payload += "\"poi_direction\":\"" + direction + "\","
+    payload += "\"h4_bias\":\"" + (h4Bias == 1 ? "bullish" : h4Bias == -1 ? "bearish" : "neutral") + "\","
+    payload += "\"mss_confirmed\":" + ((bullBosEvent or bearBosEvent) ? "true" : "false") + ","
+    payload += "\"displacement_confirmed\":" + ((bullDisplacement or bearDisplacement) ? "true" : "false") + ","
+    payload += "\"ob_high\":" + (poiFound ? str.tostring(payloadObHigh, format.mintick) : "null") + ","
+    payload += "\"ob_low\":" + (poiFound ? str.tostring(payloadObLow, format.mintick) : "null") + ","
+    payload += "\"imb_high\":" + (poiFound ? str.tostring(payloadImbHigh, format.mintick) : "null") + ","
+    payload += "\"imb_low\":" + (poiFound ? str.tostring(payloadImbLow, format.mintick) : "null")
+    payload += "}"
+    alert(payload, alert.freq_once_per_bar_close)
+
+alertcondition(bearSweep, "JARVIS: Confirmed high-side liquidity sweep", "Confirmed liquidity sweep above Tokyo high / previous-day high on {{ticker}} {{interval}}")
+alertcondition(bullSweep, "JARVIS: Confirmed low-side liquidity sweep", "Confirmed liquidity sweep below Tokyo low / previous-day low on {{ticker}} {{interval}}")
+alertcondition(bullBosEvent, "JARVIS: Bullish BOS", "Confirmed bullish BOS on {{ticker}} {{interval}}")
+alertcondition(bearBosEvent, "JARVIS: Bearish BOS", "Confirmed bearish BOS on {{ticker}} {{interval}}")
+alertcondition(bullPoiEvent, "JARVIS: Bullish POI", "Qualified bullish OB + FVG on {{ticker}} {{interval}}")
+alertcondition(bearPoiEvent, "JARVIS: Bearish POI", "Qualified bearish OB + FVG on {{ticker}} {{interval}}")
