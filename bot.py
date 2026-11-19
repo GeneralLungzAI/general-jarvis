@@ -103,6 +103,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print(f"[JARVIS] COMMAND_HANDLER help update_id={update.update_id}", flush=True)
     await update.message.reply_text(
         "GENERAL JARVIS COMMANDS\n\n"
         "/start - Initialize Jarvis\n"
@@ -141,6 +142,7 @@ async def addtask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print(f"[JARVIS] COMMAND_HANDLER tasks update_id={update.update_id}", flush=True)
     tasks = list_tasks(update.effective_user.id, "pending")
     if not tasks:
         await update.message.reply_text("No pending tasks, General.")
@@ -191,6 +193,7 @@ async def deltask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def respond(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print(f"[JARVIS] TEXT_HANDLER update_id={update.update_id}", flush=True)
     message = update.message.text.strip()
     if not message:
         return
