@@ -183,6 +183,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "GENERAL JARVIS COMMANDS\n\n"
         "/start - Initialize Jarvis\n"
+        "/pois - Show active stored EURUSD POI candidates\\n"
         "/help - Show commands\n"
         "/reset - Clear conversation history only\n"
         "/remember <category> | <fact> - Save long-term memory\n"
@@ -497,12 +498,12 @@ def tradingview_webhook():
             if chat_id and telegram_application is not None and telegram_loop is not None:
                 direction = payload["poi_direction"].upper()
                 message = (
-                    f"GENERAL JARVIS — QUALIFIED EURUSD {direction} POI\\n"
-                    f"Timeframe: M15\\n"
-                    f"H4 bias: {payload['h4_bias']}\\n"
-                    f"OB: {payload['ob_low']} – {payload['ob_high']}\\n"
-                    f"IMB: {payload['imb_low']} – {payload['imb_high']}\\n"
-                    f"POI ID: {result['poi_id']}\\n"
+                    f"GENERAL JARVIS — QUALIFIED EURUSD {direction} POI\n"
+                    f"Timeframe: M15\n"
+                    f"H4 bias: {payload['h4_bias']}\n"
+                    f"OB: {payload['ob_low']} – {payload['ob_high']}\n"
+                    f"IMB: {payload['imb_low']} – {payload['imb_high']}\n"
+                    f"POI ID: {result['poi_id']}\n"
                     "Candidate only. No trade has been executed."
                 )
                 future = asyncio.run_coroutine_threadsafe(
