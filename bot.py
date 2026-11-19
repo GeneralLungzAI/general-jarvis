@@ -22,6 +22,9 @@ from task_store import (
     list_tasks,
     complete_task,
     delete_task,
+    acquire_telegram_polling_lock,
+    start_telegram_lock_heartbeat,
+    release_telegram_polling_lock,
 )
 
 TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -257,8 +260,20 @@ def run_bot():
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        print("[JARVIS] Starting Telegram polling...", flush=True)
-        application.run_polling(stop_signals=None)
+
+        polling_lock_connection = acquire_telegram_polling_lock()
+        heartbeat = start_telegram_lock_heartbeat(
+            polling_lock_connection
+        )
+
+        try:
+            print("[JARVIS] Starting Telegram polling...", flush=True)
+            application.run_polling(stop_signals=None)
+        finally:
+            release_telegram_polling_lock(
+                polling_lock_connection,
+                *heartbeat
+            )
 
     except Exception as error:
         print(
