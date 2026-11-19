@@ -104,17 +104,40 @@ var int lastBearSweepBar = na
 var int lastBullSweepBar = na
 if bearishSweep
     lastBearSweepBar := bar_index
+    lastBullSweepBar := na
 if bullishSweep
     lastBullSweepBar := bar_index
+    lastBearSweepBar := na
 bool bearSweepFresh = not na(lastBearSweepBar) and bar_index - lastBearSweepBar <= sweepLife
 bool bullSweepFresh = not na(lastBullSweepBar) and bar_index - lastBullSweepBar <= sweepLife
 
-// MSS is a confirmed close through the latest confirmed opposing swing,
-// and must follow the matching liquidity sweep.
-bool bullishMSS = isM15 and barstate.isconfirmed and bullSweepFresh and not na(lastSwingHigh) and ta.crossover(close, lastSwingHigh)
-bool bearishMSS = isM15 and barstate.isconfirmed and bearSweepFresh and not na(lastSwingLow) and ta.crossunder(close, lastSwingLow)
+// Stateful sequence: sweep -> confirmed MSS -> displacement -> IMB.
+// Each stage must occur on a later confirmed M15 candle; no same-bar shortcut.
+int displacementLife = input.int(3, "M15 bars allowed after MSS for displacement/IMB", minval=1, maxval=8, group=G_STRUCTURE)
+var int bullStage = 0
+var int bearStage = 0
+var int bullSweepAt = na
+var int bearSweepAt = na
+var int bullMssAt = na
+var int bearMssAt = na
+var int bullDispAt = na
+var int bearDispAt = na
+var float bullZoneTop = na
+var float bullZoneBottom = na
+var float bearZoneTop = na
+var float bearZoneBottom = na
+var float bullImbTop = na
+var float bullImbBottom = na
+var float bearImbTop = na
+var float bearImbBottom = na
+var int bullObLeft = na
+var int bearObLeft = na
+var bool bullishPOI = false
+var bool bearishPOI = false
 
-// ── Displacement + 3-candle imbalance ────────────────────────────────────────
+bool bullishMSS = isM15 and barstate.isconfirmed and bullStage == 1 and not na(lastSwingHigh) and ta.crossover(close, lastSwingHigh)
+bool bearishMSS = isM15 and barstate.isconfirmed and bearStage == 1 and not na(lastSwingLow) and ta.crossunder(close, lastSwingLow)
+
 float atr = ta.atr(atrLen)
 float candleRange = math.max(high - low, syminfo.mintick)
 float body = math.abs(close - open)
@@ -124,49 +147,91 @@ bool bearishDisplacement = close < open and strongBody
 bool bullishIMB = bar_index >= 2 and low > high[2]
 bool bearishIMB = bar_index >= 2 and high < low[2]
 
-// ── Refined OB: last opposing candle in the MSS displacement leg ─────────────
-// Use full candle range to preserve the original v1 marking convention.
-// Reject a candidate if price traded back through that candle's full range
-// between its origin and the confirmed MSS/displacement candle.
-float bullObTop = na
-float bullObBottom = na
-int bullObOffset = na
-bool bullObUntouched = false
-if bullishMSS and bullishDisplacement and bullishIMB
-    for i = 1 to obLookback
-        if na(bullObOffset) and close[i] < open[i]
-            bool untouched = true
-            for j = 0 to i - 1
-                if low[j] <= high[i] and high[j] >= low[i]
-                    untouched := false
-            if untouched
-                bullObTop := high[i]
-                bullObBottom := low[i]
-                bullObOffset := i
-                bullObUntouched := true
+bullishPOI := false
+bearishPOI := false
 
-float bearObTop = na
-float bearObBottom = na
-int bearObOffset = na
-bool bearObUntouched = false
-if bearishMSS and bearishDisplacement and bearishIMB
-    for i = 1 to obLookback
-        if na(bearObOffset) and close[i] > open[i]
-            bool untouched = true
-            for j = 0 to i - 1
-                if low[j] <= high[i] and high[j] >= low[i]
-                    untouched := false
-            if untouched
-                bearObTop := high[i]
-                bearObBottom := low[i]
-                bearObOffset := i
-                bearObUntouched := true
+if isM15 and barstate.isconfirmed
+    // Expire stale stages; H4 bias is authoritative and can invalidate a setup.
+    if bullStage > 0 and (h4Bias != 1 or (not na(bullSweepAt) and bar_index - bullSweepAt > sweepLife + displacementLife + 2))
+        bullStage := 0
+    if bearStage > 0 and (h4Bias != -1 or (not na(bearSweepAt) and bar_index - bearSweepAt > sweepLife + displacementLife + 2))
+        bearStage := 0
 
-bool bullishH4Aligned = h4Bias == 1
-bool bearishH4Aligned = h4Bias == -1
-bool bullishPOI = isM15 and barstate.isconfirmed and bullishMSS and bullishDisplacement and bullishIMB and bullObUntouched and bullishH4Aligned
-bool bearishPOI = isM15 and barstate.isconfirmed and bearishMSS and bearishDisplacement and bearishIMB and bearObUntouched and bearishH4Aligned
+    if bullishSweep
+        bullStage := 1
+        bullSweepAt := bar_index
+        bullMssAt := na
+        bullDispAt := na
+    if bearishSweep
+        bearStage := 1
+        bearSweepAt := bar_index
+        bearMssAt := na
+        bearDispAt := na
 
+    if bullishMSS
+        bullStage := 2
+        bullMssAt := bar_index
+    if bearishMSS
+        bearStage := 2
+        bearMssAt := bar_index
+
+    // Capture the last opposing candle that belongs to the post-MSS impulse.
+    if bullStage == 2 and not na(bullMssAt) and bar_index > bullMssAt and bar_index - bullMssAt <= displacementLife and bullishDisplacement
+        int foundOffset = na
+        float foundTop = na
+        float foundBottom = na
+        for i = 1 to obLookback
+            if na(foundOffset) and i < bar_index - bullMssAt + 1 and close[i] < open[i]
+                bool untouched = true
+                for j = 0 to i - 1
+                    if low[j] <= high[i] and high[j] >= low[i]
+                        untouched := false
+                if untouched
+                    foundOffset := i
+                    foundTop := high[i]
+                    foundBottom := low[i]
+        if not na(foundOffset)
+            bullStage := 3
+            bullDispAt := bar_index
+            bullObLeft := bar_index - foundOffset
+            bullZoneTop := foundTop
+            bullZoneBottom := foundBottom
+
+    if bearStage == 2 and not na(bearMssAt) and bar_index > bearMssAt and bar_index - bearMssAt <= displacementLife and bearishDisplacement
+        int foundOffset = na
+        float foundTop = na
+        float foundBottom = na
+        for i = 1 to obLookback
+            if na(foundOffset) and i < bar_index - bearMssAt + 1 and close[i] > open[i]
+                bool untouched = true
+                for j = 0 to i - 1
+                    if low[j] <= high[i] and high[j] >= low[i]
+                        untouched := false
+                if untouched
+                    foundOffset := i
+                    foundTop := high[i]
+                    foundBottom := low[i]
+        if not na(foundOffset)
+            bearStage := 3
+            bearDispAt := bar_index
+            bearObLeft := bar_index - foundOffset
+            bearZoneTop := foundTop
+            bearZoneBottom := foundBottom
+
+    // The three-candle imbalance may print on the displacement candle or
+    // within the next configured bars; it must remain tied to that impulse.
+    if bullStage == 3 and not na(bullDispAt) and bar_index >= bullDispAt and bar_index - bullDispAt <= displacementLife and bullishIMB and h4Bias == 1
+        bullImbTop := low
+        bullImbBottom := high[2]
+        bullishPOI := true
+        bullStage := 0
+    if bearStage == 3 and not na(bearDispAt) and bar_index >= bearDispAt and bar_index - bearDispAt <= displacementLife and bearishIMB and h4Bias == -1
+        bearImbTop := low[2]
+        bearImbBottom := high
+        bearishPOI := true
+        bearStage := 0
+
+// MSS labels mark only the confirmed structural transition in the active sequence.
 // ── Draw only qualified structure-linked OB + IMB zones ──────────────────────
 if showPOI and bullishPOI
     box.new(left=bar_index-bullObOffset, top=bullObTop, right=bar_index+1, bottom=bullObBottom, extend=extend.right, border_color=color.lime, bgcolor=color.new(color.lime, 87), text="OB+ | H4 aligned", text_color=color.lime)
