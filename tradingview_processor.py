@@ -68,11 +68,12 @@ def initialize():
             """)
 
 
-def _latest_events(candles, timeframe, prior_trend):
+def _latest_events(candles, timeframe, prior_trend, start_index=0):
     if len(candles) < max(CONFIG.atr_period, CONFIG.pivot_left + CONFIG.pivot_right + 2):
         return []
     return detect_structure_events(
-        candles, timeframe, config=CONFIG, prior_trend=prior_trend
+        candles, timeframe, config=CONFIG, prior_trend=prior_trend,
+        start_index=start_index
     )
 
 
@@ -191,12 +192,18 @@ def process_closed_bar(event):
                 if item.candle_timestamp < poi["mitigated_at"]
             ]
             established_m1_trend = latest(pre_mitigation).direction if pre_mitigation else None
+            m1_start = next((i for i, bar in enumerate(by_tf["M1"])
+                             if bar.timestamp >= poi["mitigated_at"]), len(by_tf["M1"]))
+            m3_start = next((i for i, bar in enumerate(by_tf["M3"])
+                             if bar.timestamp >= poi["mitigated_at"]), len(by_tf["M3"]))
+            m5_start = next((i for i, bar in enumerate(by_tf["M5"])
+                             if bar.timestamp >= poi["mitigated_at"]), len(by_tf["M5"]))
             events_m1 = (
-                _latest_events(by_tf["M1"], "M1", established_m1_trend)
+                _latest_events(by_tf["M1"], "M1", established_m1_trend, m1_start)
                 if established_m1_trend in ("bullish", "bearish") else []
             )
-            events_m3 = _latest_events(by_tf["M3"], "M3", direction)
-            events_m5 = _latest_events(by_tf["M5"], "M5", direction)
+            events_m3 = _latest_events(by_tf["M3"], "M3", direction, m3_start)
+            events_m5 = _latest_events(by_tf["M5"], "M5", direction, m5_start)
 
             # Only events closing after mitigation count toward confirmation.
             post_mit_m1 = [item for item in events_m1 if item.candle_timestamp >= poi["mitigated_at"]]
