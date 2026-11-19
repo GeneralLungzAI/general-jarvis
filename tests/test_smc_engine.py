@@ -59,6 +59,40 @@ class StructureEngineTests(unittest.TestCase):
         )
         self.assertTrue(all(e.candle_timestamp != bars[-1].timestamp for e in events))
 
+
+    def test_start_index_preserves_swing_context_but_skips_earlier_events(self):
+        config = EngineConfig(
+            pivot_left=1, pivot_right=1, atr_period=2,
+            min_body_atr=0.1, min_range_atr=0.1,
+            min_close_location=0.5, max_extension_atr=10.0,
+        )
+        bars = [
+            Candle(1, 1.0, 2.0, 0.0, 1.0),
+            Candle(2, 2.0, 3.0, 1.0, 2.0),
+            Candle(3, 4.0, 5.0, 2.0, 4.0),
+            Candle(4, 2.0, 3.0, 1.0, 2.0),
+            Candle(5, 2.0, 3.0, 1.0, 2.0),
+            Candle(6, 2.5, 6.0, 2.0, 5.5),
+        ]
+        all_events = detect_structure_events(
+            bars, "M1", config=config, prior_trend="bearish"
+        )
+        post_mitigation = detect_structure_events(
+            bars, "M1", config=config, prior_trend="bearish", start_index=5
+        )
+        self.assertEqual([e.candle_timestamp for e in post_mitigation], [6])
+        self.assertEqual(post_mitigation[-1].event, "MSS")
+        self.assertTrue(post_mitigation[-1].eligible)
+        self.assertGreater(len(all_events), len(post_mitigation))
+
+    def test_start_index_at_end_returns_no_events(self):
+        config = EngineConfig(pivot_left=1, pivot_right=1, atr_period=2)
+        bars = [Candle(i, 1.0, 1.1, .9, 1.0) for i in range(20)]
+        self.assertEqual(
+            detect_structure_events(bars, "M1", config=config, start_index=len(bars)),
+            [],
+        )
+
     def test_consensus_fails_closed_without_h4_or_m5(self):
         event = StructureEvent(
             "M1", "bullish", "MSS", 1.1, 1000, 900, True,
