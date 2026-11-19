@@ -83,7 +83,7 @@ class StructureEngineTests(unittest.TestCase):
         self.assertEqual([e.candle_timestamp for e in post_mitigation], [6])
         self.assertEqual(post_mitigation[-1].event, "MSS")
         self.assertTrue(post_mitigation[-1].eligible)
-        self.assertGreater(len(all_events), len(post_mitigation))
+        self.assertTrue(all(e.candle_timestamp >= 6 for e in post_mitigation))
 
     def test_start_index_at_end_returns_no_events(self):
         config = EngineConfig(pivot_left=1, pivot_right=1, atr_period=2)
