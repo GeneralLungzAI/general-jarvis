@@ -4,6 +4,7 @@ Events are stored for audit/replay only. This module never creates orders.
 """
 import json
 import os
+import math
 from contextlib import contextmanager
 
 import psycopg2
@@ -57,6 +58,17 @@ def save_event(event):
         raise ValueError("Text event fields must be non-empty strings.")
     if event["timeframe"] not in ("1", "3", "5", "15", "60", "240"):
         raise ValueError("Unsupported timeframe.")
+    if event["event_type"] not in ("closed_bar", "structure_candidate", "displacement_candidate", "context_update"):
+        raise ValueError("Unsupported event_type.")
+    if event["event_type"] == "closed_bar":
+        try:
+            prices = {key: float(event[key]) for key in ("open", "high", "low", "close")}
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("closed_bar requires numeric OHLC fields.")
+        if not all(math.isfinite(value) for value in prices.values()):
+            raise ValueError("OHLC values must be finite.")
+        if prices["low"] > min(prices["open"], prices["close"]) or prices["high"] < max(prices["open"], prices["close"]) or prices["high"] < prices["low"]:
+            raise ValueError("OHLC envelope is invalid.")
     if event["symbol"].upper().replace("/", "") != "EURUSD":
         raise ValueError("Only EURUSD events are accepted in this build.")
     if type(event["bar_time"]) is not int or event["bar_time"] <= 0:
