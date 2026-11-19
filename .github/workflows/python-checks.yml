@@ -1,0 +1,24 @@
+name: General JARVIS checks
+
+on:
+  push:
+    branches:
+      - feature/persistent-task-management
+  pull_request:
+    branches:
+      - feature/persistent-task-management
+
+jobs:
+  python-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install application dependencies
+        run: pip install -r requirements.txt
+      - name: Compile Python modules
+        run: python -m py_compile bot.py memory_store.py task_store.py long_term_memory.py tradingview_store.py tradingview_processor.py smc_engine.py
+      - name: Run deterministic SMC tests
+        run: python -m unittest discover -s tests -v
