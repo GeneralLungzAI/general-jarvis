@@ -148,6 +148,27 @@ def ask_openai(history):
     return "I couldn't generate a response. Please try again, General."
 
 
+async def pois_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show recent active, qualified M15 POI candidates stored in Neon."""
+    try:
+        candidates = await asyncio.to_thread(list_poi_candidates, "active", 10)
+        if not candidates:
+            await update.message.reply_text("No active qualified EURUSD POI candidates are stored, General.")
+            return
+        lines = ["ACTIVE EURUSD POI CANDIDATES — NEON"]
+        for item in candidates:
+            lines.append(
+                f"#{item['id']} {item['direction'].upper()} | H4 {item['h4_bias']}\n"
+                f"OB {item['ob_low']}–{item['ob_high']} | "
+                f"IMB {item['imb_low']}–{item['imb_high']}\n"
+                f"Event {item['event_id']}"
+            )
+        await update.message.reply_text("\n\n".join(lines))
+    except Exception as error:
+        print(f"[JARVIS] POI_LIST_ERROR {type(error).__name__}", flush=True)
+        await update.message.reply_text("I couldn't retrieve stored POI candidates from Neon just now.")
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "GENERAL JARVIS ONLINE.\n"
@@ -394,6 +415,7 @@ async def _initialize_telegram():
 
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("pois", pois_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("reset", reset_command))
     application.add_handler(CommandHandler("remember", remember_command))
