@@ -116,6 +116,9 @@ def confirmed_swings(candles: Sequence[Candle], left: int = 2, right: int = 2) -
     swings: list[Swing] = []
     for i in range(left, len(candles) - right):
         window = candles[i-left:i+right+1]
+        # A pivot is not confirmed if any right-hand confirmation candle is live.
+        if not all(c.closed for c in window):
+            continue
         current = candles[i]
         highs = [x.high for j, x in enumerate(window) if j != left]
         lows = [x.low for j, x in enumerate(window) if j != left]
@@ -147,6 +150,8 @@ def detect_structure_events(
     labelled BOS-neutral rather than guessing an MSS.
     """
     config.validate()
+    if timeframe not in ("M1", "M3", "M5", "M15", "H1", "H4"):
+        raise ValueError("unsupported timeframe")
     bars = list(candles)
     if len(bars) < max(config.atr_period, config.pivot_left + config.pivot_right + 2):
         return []
@@ -233,7 +238,10 @@ def execution_consensus(
     m5 = list(events_by_tf.get("M5", ()))
     if not m1:
         return {"status": "STAND_DOWN", "reason": "m1_trigger_missing"}
-    trigger = m1[-1]
+    # Do not rely on input ordering: choose the most recent timestamp per TF.
+    trigger = max(m1, key=lambda event: event.candle_timestamp)
+    if trigger.event != "MSS":
+        return {"status": "STAND_DOWN", "reason": "m1_mss_not_confirmed"}
     if trigger.direction != h4_bias:
         return {"status": "STAND_DOWN", "reason": "m1_conflicts_with_h4"}
     if not trigger.eligible:
@@ -243,13 +251,13 @@ def execution_consensus(
             continue
         if not events:
             return {"status": "STAND_DOWN", "reason": f"{tf.lower()}_confirmation_missing"}
-        latest = events[-1]
+        latest = max(events, key=lambda event: event.candle_timestamp)
         if latest.direction != h4_bias or not latest.eligible:
             return {"status": "STAND_DOWN", "reason": f"{tf.lower()}_conflicts_or_is_not_eligible"}
     return {
         "status": "CONFIRMATION_CANDIDATE",
         "direction": h4_bias,
         "trigger_time": trigger.candle_timestamp,
-        "reason": "m1_trigger_with_required_m3_m5_support_and_h4_alignment",
-        "warning": "Research candidate only; M15 context, event expiry, liquidity, POI, and calibration gates remain external.",
+        "reason": "m1_mss_and_displacement_with_required_m3_m5_support_and_h4_alignment",
+        "warning": "Research candidate only; caller must still validate event age, H4 structure, M15 POI/liquidity, session/news rules, and calibrated thresholds.",
     }
