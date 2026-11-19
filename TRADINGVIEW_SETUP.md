@@ -46,14 +46,14 @@ The current Render service is on the Free compute plan. Render Free web services
 
 ## Acceptance checks
 
-1. GitHub Actions Python compile and unit tests pass.
-2. Render latest deploy is live and `/health` reports Telegram, webhook secret, and processor readiness.
-3. If `telegram_chat_configured` is false on `/health`, send `/chatid` to the bot and set the returned value as `TELEGRAM_CHAT_ID` in Render Environment, then allow the service to redeploy.
-5. Telegram `/tasks`, `/addtask`, `/done`, `/remember`, and `/memories` work with persistent Neon records.
-6. A TradingView alert delivers a confirmed EURUSD bar and Render logs show it queued and processed.
-5. A valid M15 POI is persisted once; a duplicate webhook does not create a second record.
-6. A replayed LTF bar marks mitigation; invalidation and LTF confirmation paths are exercised in a controlled test.
-7. Telegram receives the POI, mitigation, invalidation, and confirmation alerts.
-8. A service restart does not erase tasks or long-term memories.
+1. GitHub Actions Python compilation and all unit tests pass.
+2. The latest Render deploy is live; `/health` returns 200 and reports Telegram, webhook-secret, processor and worker readiness.
+3. If `telegram_chat_configured` is false, send `/chatid` to the bot and set the returned value as `TELEGRAM_CHAT_ID` in Render Environment.
+4. Telegram `/tasks`, `/addtask`, `/done`, `/remember`, and `/memories` work with persistent Neon records.
+5. A TradingView alert delivers a confirmed EURUSD bar; Render logs show it queued and processed.
+6. A qualified M15 POI is persisted once; a duplicate webhook does not create a second record.
+7. Controlled tests exercise POI mitigation, invalidation and post-mitigation LTF confirmation.
+8. Telegram receives POI, mitigation, invalidation and confirmation alerts.
+9. A service restart does not erase tasks or long-term memories.
 
 A live TradingView alert and Telegram recipient are account-level configuration. Do not mark those checks passed until the user has configured and observed them.
