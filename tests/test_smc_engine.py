@@ -24,6 +24,27 @@ class StructureEngineTests(unittest.TestCase):
         self.assertEqual(high.index, 2)
         self.assertEqual(high.confirmed_at_index, 4)
 
+
+    def test_live_right_hand_bar_cannot_confirm_pivot(self):
+        bars = [
+            Candle(0, 1.0, 1.1, .9, 1.0),
+            Candle(60, 1.0, 1.2, .95, 1.1),
+            Candle(120, 1.1, 1.5, 1.0, 1.3),
+            Candle(180, 1.3, 1.35, 1.0, 1.1),
+            Candle(240, 1.1, 1.2, .98, 1.0, closed=False),
+        ]
+        self.assertEqual(confirmed_swings(bars, left=2, right=2), [])
+
+    def test_unknown_trend_break_is_not_an_mss(self):
+        bars = []
+        for i in range(40):
+            base = 1.0 + i * .00001
+            bars.append(Candle(i * 60, base, base + .0005, base - .0005, base + .0001))
+        events = detect_structure_events(
+            bars, "M1", EngineConfig(pivot_left=2, pivot_right=2, atr_period=5)
+        )
+        self.assertTrue(all(event.event != "MSS" for event in events))
+
     def test_incomplete_bar_never_emits_event(self):
         bars = []
         price = 1.0
@@ -40,7 +61,7 @@ class StructureEngineTests(unittest.TestCase):
 
     def test_consensus_fails_closed_without_h4_or_m5(self):
         event = StructureEvent(
-            "M1", "bullish", "BOS", 1.1, 1000, 900, True,
+            "M1", "bullish", "MSS", 1.1, 1000, 900, True,
             1.2, 1.3, .8, False, .4, True, (),
         )
         self.assertEqual(
@@ -52,10 +73,17 @@ class StructureEngineTests(unittest.TestCase):
             "STAND_DOWN",
         )
 
+
+    def test_consensus_rejects_non_mss_m1_break(self):
+        m1 = StructureEvent("M1", "bullish", "BOS", 1.1, 1000, 900, True, 1.2, 1.3, .8, True, .4, True, ())
+        support = StructureEvent("M3", "bullish", "BOS", 1.1, 990, 900, True, 1.2, 1.3, .8, False, .4, True, ())
+        result = execution_consensus({"M1": [m1], "M3": [support], "M5": [support]}, "bullish")
+        self.assertEqual(result["reason"], "m1_mss_not_confirmed")
+
     def test_consensus_requires_directional_support(self):
         m1 = StructureEvent("M1", "bullish", "MSS", 1.1, 1000, 900, True, 1.2, 1.3, .8, True, .4, True, ())
-        m3 = StructureEvent("M3", "bullish", "BOS", 1.1, 1000, 900, True, 1.2, 1.3, .8, False, .4, True, ())
-        m5 = StructureEvent("M5", "bearish", "BOS", 1.1, 1000, 900, True, 1.2, 1.3, .8, False, .4, True, ())
+        m3 = StructureEvent("M3", "bullish", "MSS", 1.1, 1000, 900, True, 1.2, 1.3, .8, False, .4, True, ())
+        m5 = StructureEvent("M5", "bearish", "MSS", 1.1, 1000, 900, True, 1.2, 1.3, .8, False, .4, True, ())
         result = execution_consensus({"M1": [m1], "M3": [m3], "M5": [m5]}, "bullish")
         self.assertEqual(result["status"], "STAND_DOWN")
         self.assertIn("m5", result["reason"])
