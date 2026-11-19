@@ -1,0 +1,29 @@
+//@version=6
+indicator("GENERAL JARVIS — TradingView OHLC Bridge", overlay=false)
+
+// Keep this secret private. Set the same value in Render as TRADINGVIEW_WEBHOOK_SECRET.
+// Never paste account passwords, broker credentials or API keys into this field.
+webhookSecret = input.string("", "JARVIS webhook secret")
+sendBars = input.bool(true, "Send confirmed EURUSD bars")
+
+isEurUsd = str.contains(str.upper(syminfo.ticker), "EURUSD")
+validTf = timeframe.period == "1" or timeframe.period == "3" or timeframe.period == "5" or timeframe.period == "15" or timeframe.period == "60" or timeframe.period == "240"
+
+if barstate.isconfirmed and sendBars and isEurUsd and validTf and str.length(webhookSecret) >= 32
+    eventId = syminfo.ticker + "-" + timeframe.period + "-" + str.tostring(time_close)
+    barUnix = int(time_close / 1000)
+    payload = "{"
+    payload += "\"secret\":\"" + webhookSecret + "\","
+    payload += "\"event_id\":\"" + eventId + "\","
+    payload += "\"symbol\":\"EURUSD\","
+    payload += "\"timeframe\":\"" + timeframe.period + "\","
+    payload += "\"event_type\":\"closed_bar\","
+    payload += "\"bar_time\":" + str.tostring(barUnix) + ","
+    payload += "\"open\":" + str.tostring(open, format.mintick) + ","
+    payload += "\"high\":" + str.tostring(high, format.mintick) + ","
+    payload += "\"low\":" + str.tostring(low, format.mintick) + ","
+    payload += "\"close\":" + str.tostring(close, format.mintick)
+    payload += "}"
+    alert(payload, alert.freq_once_per_bar_close)
+
+plot(close, title="Bridge heartbeat (hidden)", display=display.none)
