@@ -16,7 +16,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 def _connect():
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL is not configured.")
-    connection = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor, connect_timeout=10)
+    connection = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor, connect_timeout=2)
     try:
         yield connection
         connection.commit()
@@ -52,13 +52,16 @@ def save_event(event):
     required = ("event_id", "symbol", "timeframe", "event_type", "bar_time")
     if not isinstance(event, dict) or any(k not in event for k in required):
         raise ValueError("Missing required TradingView event fields.")
+    if not all(isinstance(event[k], str) and event[k].strip() for k in
+               ("event_id", "symbol", "timeframe", "event_type")):
+        raise ValueError("Text event fields must be non-empty strings.")
     if event["timeframe"] not in ("1", "3", "5", "15", "60", "240"):
         raise ValueError("Unsupported timeframe.")
-    if event["symbol"].upper().replace("/", "") not in ("EURUSD", "EURUSD"):
+    if event["symbol"].upper().replace("/", "") != "EURUSD":
         raise ValueError("Only EURUSD events are accepted in this build.")
-    if not isinstance(event["bar_time"], int) or event["bar_time"] <= 0:
+    if type(event["bar_time"]) is not int or event["bar_time"] <= 0:
         raise ValueError("bar_time must be a positive Unix timestamp.")
-    if len(str(event["event_id"])) > 128:
+    if len(event["event_id"]) > 128:
         raise ValueError("event_id is too long.")
     if len(json.dumps(event)) > 12000:
         raise ValueError("TradingView payload is too large.")
