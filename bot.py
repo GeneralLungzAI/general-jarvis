@@ -40,6 +40,11 @@ from tradingview_store import (
     database_status,
 )
 
+from tradingview_processor import (
+    initialize as initialize_tradingview_processor,
+    process_closed_bar,
+)
+
 from long_term_memory import (
     initialize as initialize_long_term_memory,
     save_memory,
@@ -406,6 +411,7 @@ async def _initialize_telegram():
     await asyncio.to_thread(initialize_conversation_store)
     await asyncio.to_thread(initialize_long_term_memory)
     await asyncio.to_thread(initialize_tradingview_store)
+    await asyncio.to_thread(initialize_tradingview_processor)
     db_status = await asyncio.to_thread(database_status)
     print(
         "[JARVIS] DATABASE_URL PostgreSQL connection verified "
@@ -462,9 +468,27 @@ def _telegram_thread():
         loop.close()
 
 
+def _send_trading_alert(message, label):
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    if not chat_id or telegram_application is None or telegram_loop is None or not telegram_ready.is_set():
+        print(f"[JARVIS] ALERT_NOT_SENT label={label} reason=telegram_chat_or_readiness_missing", flush=True)
+        return False
+    try:
+        future = asyncio.run_coroutine_threadsafe(
+            telegram_application.bot.send_message(chat_id=chat_id, text=message),
+            telegram_loop,
+        )
+        future.result(timeout=10)
+        print(f"[JARVIS] TELEGRAM_ALERT_SENT label={label}", flush=True)
+        return True
+    except Exception as error:
+        print(f"[JARVIS] TELEGRAM_ALERT_ERROR label={label} type={type(error).__name__}", flush=True)
+        return False
+
+
 @app.route("/tradingview/webhook", methods=["POST"])
 def tradingview_webhook():
-    """Authenticate, validate and durably queue TradingView events; never trade."""
+    """Authenticate, persist and process confirmed TradingView bars; never trade."""
     expected_secret = os.environ.get("TRADINGVIEW_WEBHOOK_SECRET")
     if not expected_secret:
         return {"error": "TradingView integration is not configured"}, 503
@@ -487,47 +511,68 @@ def tradingview_webhook():
         result = save_tradingview_event(payload)
         if result["duplicate"]:
             return {"ok": True, "duplicate": True}, 200
+
+        notices = []
+        if payload.get("event_type") == "closed_bar":
+            notices = process_closed_bar(payload)
+
         print(
             f"[JARVIS] TRADINGVIEW_EVENT_STORED id={result['id']} "
             f"tf={payload['timeframe']} type={payload['event_type']} "
-            f"poi_id={result.get('poi_id')}",
+            f"poi_id={result.get('poi_id')} lifecycle_events={len(notices)}",
             flush=True,
         )
+
         if result.get("poi_id") is not None:
-            chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-            if chat_id and telegram_application is not None and telegram_loop is not None:
-                direction = payload["poi_direction"].upper()
+            message = (
+                f"GENERAL JARVIS — QUALIFIED EURUSD {payload['poi_direction'].upper()} POI\\n"
+                f"Timeframe: M15\\nH4 bias: {payload['h4_bias']}\\n"
+                f"OB: {payload['ob_low']} – {payload['ob_high']}\\n"
+                f"IMB: {payload['imb_low']} – {payload['imb_high']}\\n"
+                f"POI ID: {result['poi_id']}\\n"
+                "Candidate only. No trade has been executed."
+            )
+            _send_trading_alert(message, f"poi_created_{result['poi_id']}")
+
+        for notice in notices:
+            poi_id = notice["poi_id"]
+            if notice["type"] == "mitigated":
                 message = (
-                    f"GENERAL JARVIS — QUALIFIED EURUSD {direction} POI\n"
-                    f"Timeframe: M15\n"
-                    f"H4 bias: {payload['h4_bias']}\n"
-                    f"OB: {payload['ob_low']} – {payload['ob_high']}\n"
-                    f"IMB: {payload['imb_low']} – {payload['imb_high']}\n"
-                    f"POI ID: {result['poi_id']}\n"
-                    "Candidate only. No trade has been executed."
+                    f"GENERAL JARVIS — EURUSD POI MITIGATED\\n"
+                    f"POI: #{poi_id} | Direction: {notice['direction'].upper()}\\n"
+                    f"H4 bias: {notice['h4_bias']}\\n"
+                    "Now monitoring M1 MSS + displacement with M3/M5 support.\\n"
+                    "No trade is authorised."
                 )
-                future = asyncio.run_coroutine_threadsafe(
-                    telegram_application.bot.send_message(
-                        chat_id=chat_id, text=message
-                    ),
-                    telegram_loop,
+                _send_trading_alert(message, f"poi_mitigated_{poi_id}")
+            elif notice["type"] == "invalidated":
+                message = (
+                    f"GENERAL JARVIS — EURUSD POI INVALIDATED\\n"
+                    f"POI: #{poi_id} | Direction: {notice['direction'].upper()}\\n"
+                    f"Close beyond OB boundary: {notice['close']}\\n"
+                    "Monitoring for a new qualified structure. No trade was placed."
                 )
-                future.result(timeout=8)
-                print(
-                    f"[JARVIS] POI_TELEGRAM_ALERT_SENT poi_id={result['poi_id']}",
-                    flush=True,
+                _send_trading_alert(message, f"poi_invalidated_{poi_id}_{payload['bar_time']}")
+            elif notice["type"] == "confirmation":
+                message = (
+                    f"GENERAL JARVIS — LTF CONFIRMATION CANDIDATE\\n"
+                    f"EURUSD {notice['direction'].upper()} | POI #{poi_id}\\n"
+                    "H4 aligned; POI mitigated; M1 MSS + displacement confirmed; "
+                    "M3 and M5 directional support confirmed.\\n"
+                    "Research alert only. Manual review required; no order was placed."
                 )
-            else:
-                print(
-                    "[JARVIS] POI persisted; Telegram alert skipped because "
-                    "TELEGRAM_CHAT_ID or Telegram readiness is missing.",
-                    flush=True,
-                )
-        return {"ok": True, "event_id": result["id"], "poi_id": result.get("poi_id")}, 200
+                _send_trading_alert(message, f"ltf_confirmation_{poi_id}")
+
+        return {
+            "ok": True,
+            "event_id": result["id"],
+            "poi_id": result.get("poi_id"),
+            "lifecycle_events": [item["type"] for item in notices],
+        }, 200
     except ValueError as error:
         return {"error": str(error)}, 400
     except Exception as error:
-        print(f"[JARVIS] TRADINGVIEW_WEBHOOK_ERROR {type(error).__name__}", flush=True)
+        print(f"[JARVIS] TRADINGVIEW_WEBHOOK_ERROR {type(error).__name__}: {error}", flush=True)
         return {"error": "temporarily unavailable"}, 503
 
 
