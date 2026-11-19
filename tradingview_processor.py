@@ -179,6 +179,9 @@ def process_closed_bar(event):
                 ))
 
             prior_m1 = "bearish" if direction == "bullish" else "bullish"
+            def latest(items):
+                return max(items, key=lambda x: x.candle_timestamp) if items else None
+
             # Establish the M1 trend from the latest structural break BEFORE
             # mitigation. If no prior trend can be established, fail closed:
             # do not manufacture an MSS from an unknown state.
@@ -194,9 +197,6 @@ def process_closed_bar(event):
             )
             events_m3 = _latest_events(by_tf["M3"], "M3", direction)
             events_m5 = _latest_events(by_tf["M5"], "M5", direction)
-
-            def latest(items):
-                return max(items, key=lambda x: x.candle_timestamp) if items else None
 
             # Only events closing after mitigation count toward confirmation.
             post_mit_m1 = [item for item in events_m1 if item.candle_timestamp >= poi["mitigated_at"]]
