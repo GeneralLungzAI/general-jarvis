@@ -142,6 +142,7 @@ def detect_structure_events(
     timeframe: str,
     config: EngineConfig = EngineConfig(),
     prior_trend: str = "unknown",
+    start_index: int = 0,
 ) -> list[StructureEvent]:
     """Detect close-confirmed breaks of the latest confirmed opposite swing.
 
@@ -159,12 +160,19 @@ def detect_structure_events(
         c.validate()
         if i and c.timestamp <= bars[i - 1].timestamp:
             raise ValueError("candles must be strictly time-ordered")
+    if start_index < 0 or start_index >= len(bars):
+        if start_index != 0:
+            return []
     swings = confirmed_swings(bars, config.pivot_left, config.pivot_right)
     events: list[StructureEvent] = []
     consumed: set[tuple[str, int]] = set()
     trend = prior_trend if prior_trend in ("bullish", "bearish") else "unknown"
 
+    # Earlier candles establish ATR and confirmed swing context only. When
+    # start_index is supplied, event classification begins at that index.
     for i, c in enumerate(bars):
+        if i < start_index:
+            continue
         if not c.closed:
             continue
         atr = _atr_at(bars, i, config.atr_period)
