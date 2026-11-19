@@ -1,16 +1,40 @@
 //@version=6
-indicator("GENERAL JARVIS — TradingView OHLC Bridge", overlay=false)
+indicator("GENERAL JARVIS — EURUSD Data Bridge + M15 IMB Candidate", overlay=true)
 
-// Keep this secret private. Set the same value in Render as TRADINGVIEW_WEBHOOK_SECRET.
-// Never paste account passwords, broker credentials or API keys into this field.
+// SECURITY:
+// Use a random alphanumeric secret of at least 32 characters.
+// Set the identical value in Render as TRADINGVIEW_WEBHOOK_SECRET.
+// Do not put broker credentials or account passwords here.
 webhookSecret = input.string("", "JARVIS webhook secret")
-sendBars = input.bool(true, "Send confirmed EURUSD bars")
+sendBars = input.bool(true, "Send confirmed EURUSD candles")
+showImb = input.bool(true, "Mark M15 imbalance candidates")
 
-isEurUsd = str.contains(str.upper(syminfo.ticker), "EURUSD")
+// TradingView symbol IDs vary by broker/feed (e.g. EURUSD, OANDA:EURUSD).
+tickerUpper = str.upper(syminfo.ticker)
+tickerIdUpper = str.upper(syminfo.tickerid)
+isEurUsd = str.contains(tickerUpper, "EURUSD") or str.contains(tickerIdUpper, "EURUSD")
 validTf = timeframe.period == "1" or timeframe.period == "3" or timeframe.period == "5" or timeframe.period == "15" or timeframe.period == "60" or timeframe.period == "240"
+secretReady = str.length(webhookSecret) >= 32
 
-if barstate.isconfirmed and sendBars and isEurUsd and validTf and str.length(webhookSecret) >= 32
-    eventId = syminfo.ticker + "-" + timeframe.period + "-" + str.tostring(time_close)
+// Three-candle fair-value-gap / imbalance candidate.
+// Bullish: current low is above the high two candles back.
+// Bearish: current high is below the low two candles back.
+// These are candidates only; an OB, HTF bias, liquidity and freshness
+// must still be independently confirmed by the JARVIS engine.
+bullishImb = timeframe.period == "15" and bar_index >= 2 and low > high[2]
+bearishImb = timeframe.period == "15" and bar_index >= 2 and high < low[2]
+imbCandidate = showImb and (bullishImb or bearishImb)
+imbLow = bullishImb ? high[2] : bearishImb ? high : na
+imbHigh = bullishImb ? low : bearishImb ? low[2] : na
+imbDirection = bullishImb ? "bullish" : bearishImb ? "bearish" : "none"
+
+plotshape(imbCandidate and barstate.isconfirmed, title="M15 IMB candidate", style=shape.diamond, location=location.abovebar, size=size.tiny, color=color.aqua, text="IMB")
+
+// One authenticated event per confirmed candle. Optional IMB metadata is
+// attached to the same event so the bridge never emits two competing alerts
+// for one bar close.
+if barstate.isconfirmed and sendBars and isEurUsd and validTf and secretReady
+    eventId = syminfo.tickerid + "-" + timeframe.period + "-" + str.tostring(time_close)
     barUnix = int(time_close / 1000)
     payload = "{"
     payload += "\"secret\":\"" + webhookSecret + "\","
@@ -22,8 +46,14 @@ if barstate.isconfirmed and sendBars and isEurUsd and validTf and str.length(web
     payload += "\"open\":" + str.tostring(open, format.mintick) + ","
     payload += "\"high\":" + str.tostring(high, format.mintick) + ","
     payload += "\"low\":" + str.tostring(low, format.mintick) + ","
-    payload += "\"close\":" + str.tostring(close, format.mintick)
+    payload += "\"close\":" + str.tostring(close, format.mintick) + ","
+    payload += "\"imb_candidate\":" + (imbCandidate ? "true" : "false") + ","
+    payload += "\"imb_direction\":\"" + imbDirection + "\","
+    payload += "\"imb_low\":" + (imbCandidate ? str.tostring(imbLow, format.mintick) : "null") + ","
+    payload += "\"imb_high\":" + (imbCandidate ? str.tostring(imbHigh, format.mintick) : "null")
     payload += "}"
     alert(payload, alert.freq_once_per_bar_close)
 
-plot(close, title="Bridge heartbeat (hidden)", display=display.none)
+if barstate.islast and not secretReady
+    // Visible reminder on the chart; no secret is exposed in labels.
+    na
