@@ -16,7 +16,7 @@ class StructureEngineTests(unittest.TestCase):
             Candle(0, 1.0, 1.1, .9, 1.0),
             Candle(60, 1.0, 1.2, .95, 1.1),
             Candle(120, 1.1, 1.5, 1.0, 1.3),
-            Candle(180, 1.3, 1.25, 1.0, 1.1),
+            Candle(180, 1.3, 1.35, 1.0, 1.1),
             Candle(240, 1.1, 1.2, .98, 1.0),
         ]
         swings = confirmed_swings(bars, left=2, right=2)
