@@ -232,6 +232,16 @@ if isM15 and barstate.isconfirmed
         bearStage := 0
 
 // MSS labels mark only the confirmed structural transition in the active sequence.
+// Stable names consumed by drawing and webhook serialization.
+float bullObTop = bullZoneTop
+float bullObBottom = bullZoneBottom
+int bullObOffset = not na(bullObLeft) ? bar_index - bullObLeft : na
+bool bullObUntouched = not na(bullObTop) and not na(bullObBottom)
+float bearObTop = bearZoneTop
+float bearObBottom = bearZoneBottom
+int bearObOffset = not na(bearObLeft) ? bar_index - bearObLeft : na
+bool bearObUntouched = not na(bearObTop) and not na(bearObBottom)
+
 // ── Draw only qualified structure-linked OB + IMB zones ──────────────────────
 if showPOI and bullishPOI
     box.new(left=bar_index-bullObOffset, top=bullObTop, right=bar_index+1, bottom=bullObBottom, extend=extend.right, border_color=color.lime, bgcolor=color.new(color.lime, 87), text="OB+ | H4 aligned", text_color=color.lime)
