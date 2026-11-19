@@ -242,13 +242,20 @@ float bearObBottom = bearZoneBottom
 int bearObOffset = not na(bearObLeft) ? bar_index - bearObLeft : na
 bool bearObUntouched = not na(bearObTop) and not na(bearObBottom)
 
-// ── Draw only qualified structure-linked OB + IMB zones ──────────────────────
-if showPOI and bullishPOI
-    box.new(left=bar_index-bullObOffset, top=bullObTop, right=bar_index+1, bottom=bullObBottom, extend=extend.right, border_color=color.lime, bgcolor=color.new(color.lime, 87), text="OB+ | H4 aligned", text_color=color.lime)
-    box.new(left=bar_index-2, top=low, right=bar_index+1, bottom=high[2], extend=extend.right, border_color=color.aqua, bgcolor=color.new(color.aqua, 88), text="IMB+", text_color=color.aqua)
-if showPOI and bearishPOI
-    box.new(left=bar_index-bearObOffset, top=bearObTop, right=bar_index+1, bottom=bearObBottom, extend=extend.right, border_color=color.red, bgcolor=color.new(color.red, 87), text="OB- | H4 aligned", text_color=color.red)
-    box.new(left=bar_index-2, top=low[2], right=bar_index+1, bottom=high, extend=extend.right, border_color=color.orange, bgcolor=color.new(color.orange, 88), text="IMB-", text_color=color.orange)
+// ── Keep only the single current qualified POI on the chart ───────────────────
+var box activeObBox = na
+var box activeImbBox = na
+if bullishPOI or bearishPOI
+    if not na(activeObBox)
+        box.delete(activeObBox)
+    if not na(activeImbBox)
+        box.delete(activeImbBox)
+    if showPOI and bullishPOI
+        activeObBox := box.new(left=bar_index-bullObOffset, top=bullObTop, right=bar_index+1, bottom=bullObBottom, extend=extend.right, border_color=color.lime, bgcolor=color.new(color.lime, 87), text="VALID OB+ | H4 aligned", text_color=color.lime)
+        activeImbBox := box.new(left=bar_index-2, top=low, right=bar_index+1, bottom=high[2], extend=extend.right, border_color=color.aqua, bgcolor=color.new(color.aqua, 88), text="VALID IMB+", text_color=color.aqua)
+    else if showPOI and bearishPOI
+        activeObBox := box.new(left=bar_index-bearObOffset, top=bearObTop, right=bar_index+1, bottom=bearObBottom, extend=extend.right, border_color=color.red, bgcolor=color.new(color.red, 87), text="VALID OB- | H4 aligned", text_color=color.red)
+        activeImbBox := box.new(left=bar_index-2, top=low[2], right=bar_index+1, bottom=high, extend=extend.right, border_color=color.orange, bgcolor=color.new(color.orange, 88), text="VALID IMB-", text_color=color.orange)
 
 plotshape(bearishSweep, title="Buy-side liquidity sweep", style=shape.triangledown, location=location.abovebar, color=color.orange, size=size.tiny, text="BSL")
 plotshape(bullishSweep, title="Sell-side liquidity sweep", style=shape.triangleup, location=location.belowbar, color=color.aqua, size=size.tiny, text="SSL")
