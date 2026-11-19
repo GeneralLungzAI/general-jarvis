@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import threading
+import time
 import urllib.request
 import urllib.error
 import traceback
@@ -38,6 +39,10 @@ from tradingview_store import (
     save_event as save_tradingview_event,
     list_poi_candidates,
     database_status,
+    claim_pending_events,
+    mark_event_processed,
+    mark_event_failed,
+    get_poi_id_for_event,
 )
 
 from tradingview_processor import (
@@ -63,6 +68,7 @@ telegram_loop = None
 telegram_ready = threading.Event()
 telegram_start_lock = threading.Lock()
 telegram_worker_started = False
+tradingview_worker_started = False
 
 SYSTEM_PROMPT = """
 You are GENERAL JARVIS, the AI assistant of GeneralLungz.
@@ -476,6 +482,7 @@ def _telegram_thread():
     asyncio.set_event_loop(loop)
     try:
         loop.run_until_complete(_initialize_telegram())
+        _start_tradingview_event_worker()
         loop.run_forever()
     except Exception as error:
         print(f"[JARVIS] Telegram webhook startup failed: {type(error).__name__}: {error}", flush=True)
@@ -505,7 +512,7 @@ def _send_trading_alert(message, label):
 
 @app.route("/tradingview/webhook", methods=["POST"])
 def tradingview_webhook():
-    """Authenticate, persist and process confirmed TradingView bars; never trade."""
+    """Authenticate and durably queue a confirmed TradingView event; never trade."""
     expected_secret = os.environ.get("TRADINGVIEW_WEBHOOK_SECRET")
     if not expected_secret:
         return {"error": "TradingView integration is not configured"}, 503
@@ -529,68 +536,121 @@ def tradingview_webhook():
         if result["duplicate"]:
             return {"ok": True, "duplicate": True}, 200
 
-        notices = []
-        if payload.get("event_type") == "closed_bar":
-            notices = process_closed_bar(payload)
-
         print(
-            f"[JARVIS] TRADINGVIEW_EVENT_STORED id={result['id']} "
+            f"[JARVIS] TRADINGVIEW_EVENT_QUEUED id={result['id']} "
             f"tf={payload['timeframe']} type={payload['event_type']} "
-            f"poi_id={result.get('poi_id')} lifecycle_events={len(notices)}",
+            f"poi_id={result.get('poi_id')}",
             flush=True,
         )
-
-        if result.get("poi_id") is not None:
-            message = (
-                f"GENERAL JARVIS — QUALIFIED EURUSD {payload['poi_direction'].upper()} POI\\n"
-                f"Timeframe: M15\\nH4 bias: {payload['h4_bias']}\\n"
-                f"OB: {payload['ob_low']} – {payload['ob_high']}\\n"
-                f"IMB: {payload['imb_low']} – {payload['imb_high']}\\n"
-                f"POI ID: {result['poi_id']}\\n"
-                "Candidate only. No trade has been executed."
-            )
-            _send_trading_alert(message, f"poi_created_{result['poi_id']}")
-
-        for notice in notices:
-            poi_id = notice["poi_id"]
-            if notice["type"] == "mitigated":
-                message = (
-                    f"GENERAL JARVIS — EURUSD POI MITIGATED\\n"
-                    f"POI: #{poi_id} | Direction: {notice['direction'].upper()}\\n"
-                    f"H4 bias: {notice['h4_bias']}\\n"
-                    "Now monitoring M1 MSS + displacement with M3/M5 support.\\n"
-                    "No trade is authorised."
-                )
-                _send_trading_alert(message, f"poi_mitigated_{poi_id}")
-            elif notice["type"] == "invalidated":
-                message = (
-                    f"GENERAL JARVIS — EURUSD POI INVALIDATED\\n"
-                    f"POI: #{poi_id} | Direction: {notice['direction'].upper()}\\n"
-                    f"Close beyond OB boundary: {notice['close']}\\n"
-                    "Monitoring for a new qualified structure. No trade was placed."
-                )
-                _send_trading_alert(message, f"poi_invalidated_{poi_id}_{payload['bar_time']}")
-            elif notice["type"] == "confirmation":
-                message = (
-                    f"GENERAL JARVIS — LTF CONFIRMATION CANDIDATE\\n"
-                    f"EURUSD {notice['direction'].upper()} | POI #{poi_id}\\n"
-                    "H4 aligned; POI mitigated; M1 MSS + displacement confirmed; "
-                    "M3 and M5 directional support confirmed.\\n"
-                    "Research alert only. Manual review required; no order was placed."
-                )
-                _send_trading_alert(message, f"ltf_confirmation_{poi_id}")
-
+        # TradingView cancels webhook requests that take more than 3 seconds.
+        # All heavier SMC work and Telegram delivery now happens in the durable
+        # database-backed worker after this fast acknowledgement.
         return {
             "ok": True,
+            "queued": True,
             "event_id": result["id"],
             "poi_id": result.get("poi_id"),
-            "lifecycle_events": [item["type"] for item in notices],
         }, 200
     except ValueError as error:
         return {"error": str(error)}, 400
     except Exception as error:
         print(f"[JARVIS] TRADINGVIEW_WEBHOOK_ERROR {type(error).__name__}: {error}", flush=True)
         return {"error": "temporarily unavailable"}, 503
+
+
+def _send_trading_notice(notice, payload, poi_id=None):
+    if poi_id is not None:
+        message = (
+            f"GENERAL JARVIS — QUALIFIED EURUSD {payload['poi_direction'].upper()} POI\n"
+            f"Timeframe: M15\nH4 bias: {payload['h4_bias']}\n"
+            f"OB: {payload['ob_low']} – {payload['ob_high']}\n"
+            f"IMB: {payload['imb_low']} – {payload['imb_high']}\n"
+            f"POI ID: {poi_id}\n"
+            "Candidate only. No trade has been executed."
+        )
+        return _send_trading_alert(message, f"poi_created_{poi_id}")
+
+    poi_id = notice["poi_id"]
+    if notice["type"] == "mitigated":
+        message = (
+            f"GENERAL JARVIS — EURUSD POI MITIGATED\n"
+            f"POI: #{poi_id} | Direction: {notice['direction'].upper()}\n"
+            f"H4 bias: {notice['h4_bias']}\n"
+            "Now monitoring M1 MSS + displacement with M3/M5 support.\n"
+            "No trade is authorised."
+        )
+        return _send_trading_alert(message, f"poi_mitigated_{poi_id}")
+    if notice["type"] == "invalidated":
+        message = (
+            f"GENERAL JARVIS — EURUSD POI INVALIDATED\n"
+            f"POI: #{poi_id} | Direction: {notice['direction'].upper()}\n"
+            f"Close beyond OB boundary: {notice['close']}\n"
+            "Monitoring for a new qualified structure. No trade was placed."
+        )
+        return _send_trading_alert(message, f"poi_invalidated_{poi_id}_{payload['bar_time']}")
+    if notice["type"] == "confirmation":
+        message = (
+            f"GENERAL JARVIS — LTF CONFIRMATION CANDIDATE\n"
+            f"EURUSD {notice['direction'].upper()} | POI #{poi_id}\n"
+            "H4 aligned; POI mitigated; M1 MSS + displacement confirmed; "
+            "M3 and M5 directional support confirmed.\n"
+            "Research alert only. Manual review required; no order was placed."
+        )
+        return _send_trading_alert(message, f"ltf_confirmation_{poi_id}")
+    return True
+
+
+def _tradingview_event_worker():
+    """Process durable TradingView inbox rows outside the 3-second webhook request."""
+    print("[JARVIS] TradingView durable event worker started.", flush=True)
+    while True:
+        try:
+            events = claim_pending_events(limit=10)
+            if not events:
+                time.sleep(1)
+                continue
+            for item in events:
+                event_id = item["event_id"]
+                payload = item["payload"]
+                try:
+                    notices = process_closed_bar(payload)
+                    poi_id = get_poi_id_for_event(event_id)
+                    if poi_id is not None:
+                        _send_trading_notice({}, payload, poi_id=poi_id)
+                    for notice in notices:
+                        _send_trading_notice(notice, payload)
+                    mark_event_processed(event_id)
+                    print(
+                        f"[JARVIS] TRADINGVIEW_EVENT_PROCESSED event_id={event_id} "
+                        f"notices={len(notices)} poi_id={poi_id}",
+                        flush=True,
+                    )
+                except Exception as error:
+                    mark_event_failed(event_id, f"{type(error).__name__}: {error}")
+                    print(
+                        f"[JARVIS] TRADINGVIEW_EVENT_PROCESSING_ERROR "
+                        f"event_id={event_id} type={type(error).__name__}: {error}",
+                        flush=True,
+                    )
+        except Exception as error:
+            print(
+                f"[JARVIS] TRADINGVIEW_WORKER_ERROR {type(error).__name__}: {error}",
+                flush=True,
+            )
+            time.sleep(2)
+
+
+def _start_tradingview_event_worker():
+    global tradingview_worker_started
+    if not tradingview_worker_started:
+        worker = threading.Thread(
+            target=_tradingview_event_worker,
+            name="tradingview-event-worker",
+            daemon=True,
+        )
+        worker.start()
+        tradingview_worker_started = True
+
 
 
 @app.route("/telegram/webhook", methods=["POST"])
