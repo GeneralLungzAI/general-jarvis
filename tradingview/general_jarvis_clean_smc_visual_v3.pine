@@ -1,7 +1,7 @@
 //@version=6
 indicator("GENERAL JARVIS — Clean SMC Visual v3", shorttitle="JARVIS SMC v3", overlay=true, max_boxes_count=20, max_lines_count=30, max_labels_count=30)
 
-// GENERAL LUNGlZ RULESET
+// GENERAL LUNGZ RULESET
 // H4 bias is authoritative. M15 sequence: relevant liquidity sweep -> confirmed
 // close through confirmed swing -> displacement -> originating OB + FVG.
 // This is visual decision support only. It never places trades.
@@ -227,6 +227,7 @@ var box activeObBox = na
 var box activeFvgBox = na
 var line activeImpArrow = na
 var label activeImpLabel = na
+var int activePoiCreatedBar = na
 if bullPoiEvent or bearPoiEvent
     if not na(activeObBox)
         box.delete(activeObBox)
@@ -244,6 +245,7 @@ if bullPoiEvent or bearPoiEvent
     float fvgBottom = bullPoiEvent ? high[2] : high
     float fvgMid = (fvgTop + fvgBottom) / 2.0
     color dirColor = bullPoiEvent ? color.lime : color.red
+    activePoiCreatedBar := bar_index
 
     if showPoi
         activeObBox := box.new(left=obLeft, top=obTop, right=bar_index + 1, bottom=obBottom, extend=extend.right, border_color=color.gray, bgcolor=color.new(color.gray, 78), text="OB", text_color=color.white)
@@ -254,7 +256,8 @@ if bullPoiEvent or bearPoiEvent
 // Remove POI drawings once price first mitigates the active OB or FVG.
 bool activeObTouched = not na(activeObBox) and high >= box.get_bottom(activeObBox) and low <= box.get_top(activeObBox)
 bool activeFvgTouched = not na(activeFvgBox) and high >= box.get_bottom(activeFvgBox) and low <= box.get_top(activeFvgBox)
-if barstate.isconfirmed and (activeObTouched or activeFvgTouched)
+bool isLaterBarThanPoiCreation = not na(activePoiCreatedBar) and bar_index > activePoiCreatedBar
+if barstate.isconfirmed and isLaterBarThanPoiCreation and (activeObTouched or activeFvgTouched)
     if not na(activeObBox)
         box.delete(activeObBox)
         activeObBox := na
@@ -267,6 +270,7 @@ if barstate.isconfirmed and (activeObTouched or activeFvgTouched)
     if not na(activeImpLabel)
         label.delete(activeImpLabel)
         activeImpLabel := na
+    activePoiCreatedBar := na
 
 // ── JARVIS webhook bridge: preserve the existing event contract ──────────────
 if barstate.isconfirmed and sendBars and isEurUsd and validTf and secretReady
