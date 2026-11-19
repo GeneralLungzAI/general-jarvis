@@ -54,6 +54,3 @@ if barstate.isconfirmed and sendBars and isEurUsd and validTf and secretReady
     payload += "}"
     alert(payload, alert.freq_once_per_bar_close)
 
-if barstate.islast and not secretReady
-    // Visible reminder on the chart; no secret is exposed in labels.
-    na
