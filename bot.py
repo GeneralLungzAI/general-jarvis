@@ -528,7 +528,7 @@ def tradingview_webhook():
     ):
         return {"error": "unauthorized"}, 403
 
-    allowed_types = {"closed_bar", "structure_candidate", "displacement_candidate", "context_update"}
+    allowed_types = {"closed_bar"}
     if payload.get("event_type") not in allowed_types:
         return {"error": "unsupported event_type"}, 400
 
