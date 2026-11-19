@@ -120,7 +120,8 @@ def health():
         "telegram": "ready" if telegram_ready.is_set() else "starting",
         "telegram_chat_configured": bool(os.environ.get("TELEGRAM_CHAT_ID")),
         "tradingview_webhook_configured": bool(os.environ.get("TRADINGVIEW_WEBHOOK_SECRET")),
-        "tradingview_processor": "enabled"
+        "tradingview_processor": "enabled",
+        "tradingview_worker": "running" if tradingview_worker_started else "starting"
     }, 200
 
 
@@ -605,6 +606,11 @@ def _tradingview_event_worker():
     print("[JARVIS] TradingView durable event worker started.", flush=True)
     while True:
         try:
+            # Keep durable events pending until a Telegram destination is
+            # configured; otherwise POI/mitigation notices could be discarded.
+            if not os.environ.get("TELEGRAM_CHAT_ID"):
+                time.sleep(3)
+                continue
             events = claim_pending_events(limit=10)
             if not events:
                 time.sleep(1)
