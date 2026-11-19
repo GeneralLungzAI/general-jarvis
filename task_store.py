@@ -97,10 +97,23 @@ def delete_task(user_id, task_id):
             return cursor.rowcount == 1
 
 
-# A transaction-scoped PostgreSQL advisory lock prevents overlapping Render
+# A session-scoped PostgreSQL advisory lock prevents overlapping Render
 # instances from polling Telegram with the same bot token. The key is the
-# Telegram bot ID, making it stable across deployments and token rotations.
+# Telegram bot ID, so it remains stable across token rotations.
 TELEGRAM_POLLING_LOCK_KEY = 9292355243
+
+
+def _polling_lock_connection():
+    """Open a dedicated, resilient connection for the polling lock."""
+    return psycopg2.connect(
+        DATABASE_URL,
+        connect_timeout=10,
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=10,
+        keepalives_count=3,
+        options="-c statement_timeout=10000"
+    )
 
 
 def acquire_telegram_polling_lock(retry_seconds=5):
@@ -108,14 +121,15 @@ def acquire_telegram_polling_lock(retry_seconds=5):
         raise RuntimeError("DATABASE_URL is not configured.")
 
     while True:
-        connection = psycopg2.connect(
-            DATABASE_URL,
-            connect_timeout=10
-        )
+        connection = None
         try:
+            connection = _polling_lock_connection()
+            # Session-level advisory locks survive transaction boundaries and
+            # are released automatically when PostgreSQL detects disconnect.
+            connection.autocommit = True
             with connection.cursor() as cursor:
                 cursor.execute(
-                    "SELECT pg_try_advisory_xact_lock(%s)",
+                    "SELECT pg_try_advisory_lock(%s)",
                     (TELEGRAM_POLLING_LOCK_KEY,)
                 )
                 acquired = cursor.fetchone()[0]
@@ -125,11 +139,8 @@ def acquire_telegram_polling_lock(retry_seconds=5):
                     "[JARVIS] Acquired exclusive Telegram polling lock in Neon.",
                     flush=True
                 )
-                # Keep this transaction open. The transaction-scoped advisory
-                # lock remains held until this connection commits or closes.
                 return connection
 
-            connection.rollback()
             connection.close()
             print(
                 "[JARVIS] Another instance owns the Telegram polling lock; "
@@ -138,8 +149,19 @@ def acquire_telegram_polling_lock(retry_seconds=5):
             )
             time.sleep(retry_seconds)
 
+        except psycopg2.OperationalError as error:
+            if connection is not None:
+                connection.close()
+            print(
+                "[JARVIS] Neon is temporarily unavailable while acquiring "
+                f"the polling lock: {error!r}. Retrying in {retry_seconds} seconds.",
+                flush=True
+            )
+            time.sleep(retry_seconds)
+
         except Exception:
-            connection.close()
+            if connection is not None:
+                connection.close()
             raise
 
 
@@ -155,9 +177,8 @@ def start_telegram_lock_heartbeat(connection, interval_seconds=15):
                         cursor.execute("SELECT 1")
                         cursor.fetchone()
             except Exception as error:
-                # If the lock connection is lost, PostgreSQL releases the
-                # advisory lock. Stop this process immediately so it cannot
-                # continue polling without owning the lock.
+                # Fail closed: never allow this process to keep polling after
+                # losing confidence that it still owns the database lock.
                 print(
                     "[JARVIS] CRITICAL: Neon polling-lock connection lost: "
                     f"{error!r}. Exiting to prevent duplicate polling.",
@@ -181,12 +202,43 @@ def release_telegram_polling_lock(
     connection_lock
 ):
     stop_event.set()
-    heartbeat_thread.join(timeout=20)
+    heartbeat_thread.join(timeout=15)
 
-    with connection_lock:
+    if heartbeat_thread.is_alive():
+        print(
+            "[JARVIS] CRITICAL: Polling-lock heartbeat did not stop cleanly. "
+            "Exiting rather than risk polling without a verified lock.",
+            flush=True
+        )
+        os._exit(1)
+
+    if not connection_lock.acquire(timeout=5):
+        print(
+            "[JARVIS] CRITICAL: Could not safely acquire the polling-lock "
+            "connection for shutdown. Exiting.",
+            flush=True
+        )
+        os._exit(1)
+
+    try:
         try:
-            connection.rollback()
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT pg_advisory_unlock(%s)",
+                    (TELEGRAM_POLLING_LOCK_KEY,)
+                )
+                released = cursor.fetchone()[0]
+
+            if not released:
+                print(
+                    "[JARVIS] CRITICAL: Neon reports that the polling lock "
+                    "was not held during shutdown. Exiting.",
+                    flush=True
+                )
+                os._exit(1)
         finally:
             connection.close()
+    finally:
+        connection_lock.release()
 
     print("[JARVIS] Released exclusive Telegram polling lock.", flush=True)
