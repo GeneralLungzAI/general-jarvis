@@ -85,6 +85,28 @@ def initialize():
                 CREATE INDEX IF NOT EXISTS idx_tradingview_events_pending
                 ON tradingview_events(processing_status, id)
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tradingview_notifications (
+                    id BIGSERIAL PRIMARY KEY,
+                    notification_key TEXT NOT NULL UNIQUE,
+                    event_id TEXT NOT NULL,
+                    poi_id BIGINT,
+                    notification_type TEXT NOT NULL,
+                    payload JSONB NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending','processing','sent','failed')),
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    available_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    claimed_at TIMESTAMPTZ,
+                    sent_at TIMESTAMPTZ,
+                    last_error TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_tradingview_notifications_pending
+                ON tradingview_notifications(status, available_at, id)
+            """)
 
 
 def save_event(event):
@@ -169,6 +191,16 @@ def save_event(event):
                 ))
                 poi_row = cursor.fetchone()
                 poi_id = poi_row["id"] if poi_row else None
+                if poi_id is not None:
+                    cursor.execute("""
+                        INSERT INTO tradingview_notifications
+                            (notification_key, event_id, poi_id, notification_type, payload)
+                        VALUES (%s, %s, %s, 'poi_created', %s)
+                        ON CONFLICT (notification_key) DO NOTHING
+                    """, (
+                        f"poi_created:{poi_id}", str(event["event_id"]), poi_id,
+                        Json({"type": "poi_created", "poi_id": poi_id, "event": event})
+                    ))
             return {"stored": event_stored, "duplicate": not event_stored,
                     "id": row["id"] if row else None, "poi_id": poi_id}
 
@@ -279,3 +311,52 @@ def get_poi_id_for_event(event_id):
             """, (event_id,))
             row = cursor.fetchone()
             return row["id"] if row else None
+
+def claim_pending_notifications(limit=10):
+    """Claim due alert outbox rows with automatic recovery after abandoned claims."""
+    limit = max(1, min(int(limit), 50))
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                WITH candidates AS (
+                    SELECT id
+                    FROM tradingview_notifications
+                    WHERE (
+                        (status='pending' AND available_at <= NOW())
+                        OR (status='processing' AND claimed_at < NOW() - INTERVAL '2 minutes')
+                    )
+                    ORDER BY id
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT %s
+                )
+                UPDATE tradingview_notifications AS notification
+                SET status='processing', attempts=attempts+1, claimed_at=NOW()
+                FROM candidates
+                WHERE notification.id=candidates.id
+                RETURNING notification.id, notification.notification_key,
+                          notification.notification_type, notification.payload,
+                          notification.attempts
+            """, (limit,))
+            return [dict(row) for row in cursor.fetchall()]
+
+
+def mark_notification_sent(notification_id):
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                UPDATE tradingview_notifications
+                SET status='sent', sent_at=NOW(), claimed_at=NULL, last_error=NULL
+                WHERE id=%s
+            """, (notification_id,))
+
+
+def mark_notification_failed(notification_id, error, max_attempts=12):
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                UPDATE tradingview_notifications
+                SET status=CASE WHEN attempts >= %s THEN 'failed' ELSE 'pending' END,
+                    available_at=NOW() + INTERVAL '30 seconds',
+                    claimed_at=NULL, last_error=%s
+                WHERE id=%s
+            """, (max_attempts, str(error)[:1000], notification_id))
